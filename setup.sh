@@ -196,20 +196,19 @@ run_health_checks() {
     echo -e "${CYAN}Running startup health checks...${NC}"
     
     # Wait for services to start
-    sleep 3
+    echo "  Waiting for container to initialize..."
+    for i in {1..15}; do
+        if curl -sf http://localhost:8002/api/health &>/dev/null; then
+            break
+        fi
+        sleep 2
+    done
     
-    # Backend health check
+    # Unified health check
     if curl -sf http://localhost:8002/api/health &>/dev/null; then
-        echo -e "${GREEN}✓ Backend health check (8002): OK${NC}"
+        echo -e "${GREEN}✓ DR.CODE Subsystem (8002): OK${NC}"
     else
-        echo -e "${RED}✗ Backend health check failed - check logs with 'docker-compose logs${NC}"
-    fi
-    
-    # Frontend health check
-    if curl -sf http://localhost:3001 &>/dev/null; then
-        echo -e "${GREEN}✓ Frontend health check (3001): OK${NC}"
-    else
-        echo -e "${RED}✗ Frontend health check failed${NC}"
+        echo -e "${RED}✗ Health check failed - check logs with 'docker compose logs'${NC}"
     fi
 }
 
@@ -220,10 +219,9 @@ print_summary() {
     echo -e "======================================${NC}"
     echo ""
     echo "  Service Endpoints:"
-    echo "    - Backend API: http://localhost:8002"
-    echo "    - Frontend UI: http://localhost:3001"
-    echo "    - Ollama: $OLLAMA_BASE_URL (auto-detected)"
-    echo "    - Model: $OLLAMA_MODEL"
+    echo "    - DR.CODE Web UI & API: http://localhost:8002"
+    echo "    - Ollama Daemon: $OLLAMA_BASE_URL (auto-detected)"
+    echo "    - Recommended Model: ${OLLAMA_MODEL:-qwen2.5-coder:7b}"
     echo "  "
     echo "  GitHub Integration:"
     if [ -n "$GITHUB_TOKEN" ]; then
