@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a0a0a"/>
+      <stop offset="100%" style="stop-color:#1a1a2e"/>
+    </linearGradient>
+    <linearGradient id="codeGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#00ff88"/>
+      <stop offset="50%" style="stop-color:#00cc6a"/>
+      <stop offset="100%" style="stop-color:#009950"/>
+    </linearGradient>
+    <linearGradient id="textGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#00e5ff"/>
+      <stop offset="100%" style="stop-color:#00b8d4"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="512" height="512" fill="url(#bgGrad)"/>
+  
+  <!-- Binary code background -->
+  <g font-family="monospace" font-size="14" fill="url(#codeGrad)" opacity="0.3">
+    <text x="20" y="50">101010</text>
+    <text x="380" y="50">011010</text>
+    <text x="20" y="90">001101</text>
+    <text x="380" y="90">110101</text>
+    <text x="20" y="130">111001</text>
+    <text x="380" y="130">000111</text>
+    <text x="20" y="170">010010</text>
+    <text x="380" y="170">101011</text>
+    <text x="20" y="210">100110</text>
+    <text x="380" y="210">011000</text>
+    <text x="20" y="250">001111</text>
+    <text x="380" y="250">110010</text>
+    <text x="20" y="290">011101</text>
+    <text x="380" y="290">100001</text>
+    <text x="20" y="330">110011</text>
+    <text x="380" y="330">001110</text>
+    <text x="20" y="370">101100</text>
+    <text x="380" y="370">010011</text>
+    <text x="20" y="410">011010</text>
+    <text x="380" y="410">100101</text>
+    <text x="20" y="450">001001</text>
+    <text x="380" y="450">110110</text>
+    <text x="20" y="490">111010</text>
+    <text x="380" y="490">000100</text>
+    
+    <!-- Extra scattered binary -->
+    <text x="150" y="40" font-size="10">1</text>
+    <text x="250" y="60" font-size="10">0</text>
+    <text x="350" y="45" font-size="10">1</text>
+    <text x="180" y="480" font-size="10">0</text>
+    <text x="300" y="490" font-size="10">1</text>
+  </g>
+  
+  <!-- DR.CODE text -->
+  <text x="256" y="290" 
+        font-family="'JetBrains Mono', 'Fira Code', monospace" 
+        font-weight="bold" 
+        font-size="120" 
+        fill="url(#textGrad)"
+        text-anchor="middle"
+        style="text-shadow: 0 0 30px rgba(0,229,255,0.5);">
+    DR.CODE
+  </text>
+  
+  <!-- Underline accent -->
+  <rect x="100" y="310" width="312" height="4" rx="2" fill="url(#codeGrad)"/>
+  
+  <!-- Corner brackets -->
+  <g stroke="#00e5ff" stroke-width="4" fill="none" opacity="0.6">
+    <path d="M 60 60 L 60 80 L 80 80"/>
+    <path d="M 432 60 L 452 60 L 452 80"/>
+    <path d="M 60 432 L 80 432 L 80 452"/>
+    <path d="M 432 432 L 432 452 L 452 452"/>
+  </g>
+</svg>

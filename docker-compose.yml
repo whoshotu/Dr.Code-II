@@ -1,0 +1,23 @@
+services:
+  drcode-hub:
+    image: ghcr.io/whoshotu/dr-code-v2-backend:latest
+    container_name: drcode-hub
+    ports:
+      - "8002:8002"
+    env_file:
+      - .env.docker
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./backend:/app
+    entrypoint: ["sh", "-c", "pip install --no-cache-dir -r requirements.txt && uvicorn server:app --host 0.0.0.0 --port 8002"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+# Note: MongoDB and Frontend services removed for 'Judge-Ready' zero-config mode.
+# The app now runs as a single self-contained unit on port 8002.

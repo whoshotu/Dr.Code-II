@@ -1,0 +1,53 @@
+# Dependencies
+node_modules/
+.pnp.js
+.yarn/
+
+# Build outputs
+build/
+dist/
+backend/static/
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+*.egg-info/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+.env.docker
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Cache
+.pytest_cache/
+.cache/
+
+# Database (SQLite)
+*.db
+
+# Session/temp files
+session-*.md
+lastsession.md
+*.tmp
+
+# Local tooling
+opencode/
+patchbundle5/
+
+# Test samples (intentionally bad code for testing)
+test-samples/

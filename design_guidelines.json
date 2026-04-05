@@ -1,0 +1,180 @@
+{
+  "typography": {
+    "font_family": {
+      "headings": "Space Grotesk, sans-serif",
+      "body": "Plus Jakarta Sans, sans-serif",
+      "code": "JetBrains Mono, monospace"
+    },
+    "scale": {
+      "h1": "text-4xl md:text-5xl font-bold tracking-tight",
+      "h2": "text-3xl font-semibold tracking-tight",
+      "h3": "text-2xl font-medium tracking-tight",
+      "p": "text-base leading-relaxed text-muted-foreground",
+      "small": "text-sm font-medium text-muted-foreground",
+      "code": "text-sm font-mono bg-muted/50 p-1 rounded"
+    },
+    "weights": {
+      "regular": 400,
+      "medium": 500,
+      "semibold": 600,
+      "bold": 700
+    },
+    "usage_rules": [
+      "Headings (h1-h3) MUST use Space Grotesk. Do not use for body text.",
+      "Body text MUST use Plus Jakarta Sans.",
+      "All code snippets, terminal outputs, and file paths MUST use JetBrains Mono.",
+      "Use 'tracking-tight' for all headings > 24px.",
+      "Use 'tracking-wide' for all uppercase labels (e.g., 'REPORT STATUS')."
+    ]
+  },
+  "colors": {
+    "theme": "dark",
+    "palette": {
+      "background": {
+        "default": "#0A0A0A",
+        "paper": "#121212",
+        "subtle": "#18181B"
+      },
+      "primary": {
+        "main": "#00E5FF",
+        "hover": "#00B2CC",
+        "foreground": "#000000"
+      },
+      "secondary": {
+        "main": "#7C3AED",
+        "hover": "#6D28D9",
+        "foreground": "#FFFFFF"
+      },
+      "accent": {
+        "teal": "#14B8A6",
+        "indigo": "#6366F1",
+        "rose": "#F43F5E",
+        "amber": "#F59E0B"
+      },
+      "text": {
+        "primary": "#EDEDED",
+        "secondary": "#A1A1AA",
+        "muted": "#52525B"
+      },
+      "border": {
+        "default": "#27272A",
+        "active": "#3F3F46"
+      }
+    },
+    "semantic_usage": {
+      "primary": "Main Call-to-Actions (Analyze Code, Fix Issue)",
+      "secondary": "AI Suggestions, Magic Fixes",
+      "success": "Pass, Clean Code (Teal)",
+      "warning": "Slop Detected, Smell (Amber)",
+      "error": "Critical Bug, Security Risk (Rose)",
+      "info": "Documentation, Info (Indigo)"
+    },
+    "gradients": {
+      "ai_magic": "bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500",
+      "glass": "bg-black/40 backdrop-blur-xl border-white/10"
+    }
+  },
+  "visual_enhancers": {
+    "borders": {
+      "default": "border border-border",
+      "tracing_beam": "relative rounded-xl border border-transparent bg-gradient-to-r from-transparent via-cyan-500 to-transparent bg-[length:200%_auto] animate-border-trace",
+      "glass": "border border-white/5"
+    },
+    "shadows": {
+      "subtle": "shadow-sm",
+      "glow": "shadow-[0_0_15px_rgba(0,229,255,0.3)]",
+      "card": "shadow-[0_8px_30px_rgb(0,0,0,0.12)]"
+    },
+    "textures": {
+      "grid": "bg-[linear-gradient(to_right,#80808012_1px,transparent_1px),linear-gradient(to_bottom,#80808012_1px,transparent_1px)] bg-[size:24px_24px]",
+      "dots": "bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] [background-size:16px_16px]"
+    },
+    "radius": {
+      "default": "rounded-lg",
+      "card": "rounded-xl",
+      "button": "rounded-md"
+    }
+  },
+  "layout": {
+    "spacing_scale": {
+      "section_gap": "gap-8 md:gap-12",
+      "component_padding": "p-6 md:p-8",
+      "internal_padding": "p-4"
+    },
+    "grid_systems": {
+      "bento_dashboard": "grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6",
+      "reports_list": "grid grid-cols-1 gap-4",
+      "detail_view": "grid grid-cols-1 lg:grid-cols-12 gap-6"
+    },
+    "containers": {
+      "main": "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8",
+      "narrow": "max-w-4xl mx-auto px-4"
+    }
+  },
+  "components": {
+    "shadcn_overrides": {
+      "Card": "bg-card border-border/50 shadow-none hover:border-primary/50 transition-colors duration-300",
+      "Button": "font-medium tracking-wide shadow-none hover:shadow-glow transition-all duration-300",
+      "Input": "bg-background border-input focus-visible:ring-offset-0 focus-visible:ring-1 focus-visible:ring-primary focus-visible:border-primary",
+      "Dialog": "bg-background/95 backdrop-blur-xl border-border"
+    },
+    "custom_components": {
+      "StatusBadge": "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-secondary/10 text-secondary border border-secondary/20",
+      "CodeBlock": "font-mono text-sm bg-[#0d1117] p-4 rounded-lg border border-border overflow-x-auto",
+      "MetricCard": "p-6 rounded-xl bg-card border border-border hover:border-primary/50 transition-all group relative overflow-hidden"
+    }
+  },
+  "motion": {
+    "transitions": {
+      "default": "transition-all duration-200 ease-in-out",
+      "slow": "transition-all duration-500 ease-out"
+    },
+    "animations": {
+      "fade_in": "animate-in fade-in zoom-in-95 duration-300",
+      "slide_up": "animate-in slide-in-from-bottom-4 duration-500",
+      "pulse_slow": "animate-pulse duration-[3000ms]"
+    }
+  },
+  "assets": {
+    "icons": {
+      "library": "lucide-react, react-icons",
+      "usage": "Use Lucide for UI (Home, Settings, User). Use React Icons (FaGithub, FaGitlab, FaDocker) for integrations.",
+      "style": "stroke-width: 1.5px; size: 20px (default)"
+    },
+    "images": {
+      "hero_background": "https://images.unsplash.com/photo-1768327239495-cd6edaeab619?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1ODR8MHwxfHNlYXJjaHwyfHxhYnN0cmFjdCUyMGN5YmVyJTIwZGF0YSUyMHZpc3VhbGl6YXRpb24lMjBkYXJrJTIwYmFja2dyb3VuZHxlbnwwfHx8fDE3NzIxNzc5MDh8MA&ixlib=rb-4.1.0&q=85",
+      "abstract_texture": "https://images.unsplash.com/photo-1771013304380-dfaf9f928de6?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1ODR8MHwxfHNlYXJjaHwxfHxhYnN0cmFjdCUyMGN5YmVyJTIwZGF0YSUyMHZpc3VhbGl6YXRpb24lMjBkYXJrJTIwYmFja2dyb3VuZHxlbnwwfHx8fDE3NzIxNzc5MDh8MA&ixlib=rb-4.1.0&q=85",
+      "categories": [
+        {
+          "name": "backgrounds",
+          "description": "Subtle dark abstract patterns for dashboard empty states or headers",
+          "urls": [
+            "https://images.unsplash.com/photo-1768327239495-cd6edaeab619?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1ODR8MHwxfHNlYXJjaHwyfHxhYnN0cmFjdCUyMGN5YmVyJTIwZGF0YSUyMHZpc3VhbGl6YXRpb24lMjBkYXJrJTIwYmFja2dyb3VuZHxlbnwwfHx8fDE3NzIxNzc5MDh8MA&ixlib=rb-4.1.0&q=85",
+            "https://images.pexels.com/photos/1089438/pexels-photo-1089438.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940"
+          ]
+        }
+      ]
+    }
+  },
+  "accessibility": {
+    "contrast_check": "Ensure all text meets WCAG AA (4.5:1). Use lighter grays (gray-300) on dark backgrounds, not gray-500.",
+    "focus_states": "All interactive elements must have a visible focus ring (ring-2 ring-primary ring-offset-2 ring-offset-background).",
+    "aria_labels": "All icon-only buttons must have aria-label.",
+    "keyboard_nav": "Ensure full keyboard navigability for dashboard widgets and code editors."
+  },
+  "universal_guidelines": {
+    "general": [
+      "Avoid 'AI Slop' in design: no generic centered layouts, no gradient text unless for specific 'AI Magic' emphasis.",
+      "Use 'sonner' for all toast notifications.",
+      "Use 'lucide-react' for icons by default.",
+      "Implement Dark Mode ONLY (as per 'Code Surgeon' persona). Force class='dark' in html/body.",
+      "Use 'data-testid' for all interactive elements."
+    ],
+    "component_rules": [
+      "Buttons: Use 'h-10 px-4 py-2' for standard buttons. Avoid 'h-9'.",
+      "Cards: Always use 'bg-card' (zinc-950) with 'border-border' (zinc-800).",
+      "Charts: Use Shadcn Charts (Recharts wrapper) with the defined css variables (chart-1 to chart-5)."
+    ],
+    "instructions_to_main_agent": "You are building a high-precision tool for developers. The UI must feel 'tactical' and 'fast'. Avoid unnecessary animations. Use the 'Bento Grid' layout for the main dashboard. Use the provided image URLs for background textures only where appropriate (e.g., login screen, empty states). Do not force images into the main data view."
+  }
+}

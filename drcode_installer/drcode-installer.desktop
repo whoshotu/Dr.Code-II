@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=DR.CODE Installer
+Comment=Install DR.CODE v2 - AI Code Analysis Platform
+Exec=bash -c "curl -sL https://raw.githubusercontent.com/whoshotu/DR.Code-v2/main/drcode_installer/install.sh | bash"
+Icon=drcode
+Terminal=true
+Type=Application
+Categories=Development;Utility;
+Keywords=drcode;code;analysis;ai;install;
+StartupNotify=true
+StartupWMClass=drcode-installer

@@ -1,0 +1,17 @@
+{
+  "include": [
+    "backend"
+  ],
+  "exclude": [
+    "backend/venv"
+  ],
+  "extraPaths": [
+    "."
+  ],
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "error",
+  "reportMissingModuleSource": "information",
+  "reportUnusedImport": "information",
+  "reportWildcardImportFromLibrary": "information"
+}

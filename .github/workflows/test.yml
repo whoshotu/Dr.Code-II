@@ -1,0 +1,163 @@
+name: Test
+
+on:
+  push:
+    branches: [ main, feature/** ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-frontend:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      
+      - name: Install dependencies
+        run: |
+          cd frontend
+          npm install --legacy-peer-deps
+      
+      - name: Run frontend build check
+        run: |
+          cd frontend
+          npm run build
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      
+      - name: Install linting tools
+        run: |
+          pip install black isort
+      
+      - name: Run black
+        run: |
+          cd backend
+          black . || true
+          cd ../frontend
+          black . || true
+      
+      - name: Run isort
+        run: |
+          cd backend
+          isort . || true
+
+  build-check:
+    name: Build Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      
+      - name: Check Python syntax
+        run: |
+          cd backend
+          python -m py_compile server.py
+          python -m py_compile tests/*.py
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Check frontend syntax
+        run: |
+          cd frontend
+          npm install --legacy-peer-deps
+          npm run build
+
+  test-backend:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    
+    services:
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+      ollama:
+        image: ollama/ollama:latest
+        ports:
+          - 11434:11434
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+      
+      - name: Set environment variables
+        run: |
+          echo "MONGO_URL=mongodb://localhost:27017/drcode" >> $GITHUB_ENV
+          echo "DB_NAME=drcode" >> $GITHUB_ENV
+          echo "CORS_ORIGINS=http://localhost:3000" >> $GITHUB_ENV
+          echo "OLLAMA_BASE_URL=${{ secrets.OLLAMA_BASE_URL }}" >> $GITHUB_ENV
+          echo "OLLAMA_MODEL=${{ secrets.OLLAMA_MODEL }}" >> $GITHUB_ENV
+          echo "PYTHONPATH=${{ github.workspace }}/backend" >> $GITHUB_ENV
+      
+      - name: Wait for services
+        run: |
+          echo "Waiting for MongoDB..."
+          for i in {1..30}; do
+            if curl -s mongodb://localhost:27017 >/dev/null 2>&1; then
+              echo "MongoDB is ready!"
+              break
+            fi
+            echo "Waiting for MongoDB... ($i/30)"
+            sleep 2
+          done
+          
+          echo "Waiting for Ollama..."
+          for i in {1..60}; do
+            if curl -s http://localhost:11434/api/tags >/dev/null 2>&1; then
+              echo "Ollama is ready!"
+              break
+            fi
+            echo "Waiting for Ollama... ($i/60)"
+            sleep 2
+          done
+      
+      - name: Start backend server
+        run: |
+          cd backend
+          uvicorn server:app --host 0.0.0.0 --port 8002 &
+          sleep 10
+          curl -s http://localhost:8002/api/health || (echo "Backend failed to start" && exit 1)
+      
+      - name: Run backend tests
+        run: |
+          cd backend
+          REACT_APP_BACKEND_URL=http://localhost:8002 pytest tests/ -v
