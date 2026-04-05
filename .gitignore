@@ -49,5 +49,8 @@ lastsession.md
 opencode/
 patchbundle5/
 
+# Demo / Presentation files
+DEMO_*.md
+
 # Test samples (intentionally bad code for testing)
 test-samples/
