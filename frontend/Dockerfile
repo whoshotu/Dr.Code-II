@@ -10,6 +10,7 @@ COPY frontend/ ./
 RUN npm run build
 
 FROM nginx:alpine
+LABEL org.opencontainers.image.source=https://github.com/whoshotu/Dr.Code-II
 COPY --from=builder /app/build /usr/share/nginx/html
 COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 80
