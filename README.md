@@ -25,10 +25,10 @@ Code review is slow, inconsistent, and security issues slip through. Existing to
 
 ## How It Works
 
-```
+```text
 GitHub PR ──webhook──▶ FastAPI Backend ──▶ Rule-based Detection + Local LLM ──▶ Inline PR Comments
                             │
-                      SQLite / MongoDB
+                          SQLite
                             │
                       React Dashboard
 ```
@@ -42,14 +42,14 @@ GitHub PR ──webhook──▶ FastAPI Backend ──▶ Rule-based Detection 
 ## Key Features
 
 | Feature | Description |
-|---------|-------------|
+| --- | --- |
 | **Code Analysis** | Rule-based + LLM hybrid detection for security risks, anti-patterns, and "slop" |
 | **Severity Scoring** | Customizable critical / high / medium / low thresholds with confidence scores |
 | **Multi-Provider AI** | Ollama (local), OpenAI-compatible, Gemini, Anthropic — switch in Settings |
 | **GitHub PR Integration** | Automated review on PR open/synchronize with HMAC signature verification |
 | **Repository Scanning** | Multi-file analysis with selective or bulk fix application |
 | **Encrypted Storage** | All API keys and tokens encrypted with Fernet before persistence |
-| **Graceful Degradation** | Works without a GitHub token, without Ollama, or without MongoDB |
+| **Graceful Degradation** | Works without a GitHub token or without local AI/Ollama |
 
 ---
 
@@ -63,7 +63,7 @@ cd DR.Code-v2
 ./setup.sh
 ```
 
-The setup script auto-detects Docker, MongoDB, and Ollama, then starts everything. Access the dashboard at **http://localhost:3001**.
+The setup script auto-detects Docker and manages Ollama automatically, pulling the default coding model (`qwen2.5-coder:7b`) if required, then starts everything. Access the dashboard at **<http://localhost:3001>**.
 
 ### Using the Makefile
 
@@ -105,7 +105,7 @@ PORT=3001 npm start
 
 ### Verify It Works
 
-1. Open **http://localhost:3001**
+1. Open **<http://localhost:3001>**
 2. Go to **Settings** → configure your AI provider (Ollama base URL + model)
 3. Go to **Analyze** → paste any code snippet and click Analyze
 
@@ -116,9 +116,8 @@ PORT=3001 npm start
 All variables are documented in `.env.example`. The key ones:
 
 | Variable | Required | Description |
-|----------|----------|-------------|
-| `DB_TYPE` | No | Set to `sqlite` for local mode (default) |
-| `MONGO_URL` | No* | MongoDB connection string (*required if not using SQLite) |
+| --- | --- | --- |
+| `DB_TYPE` | No | Set to `sqlite` natively (default mode) |
 | `OLLAMA_BASE_URL` | Yes* | LLM endpoint (*required for AI analysis) |
 | `OLLAMA_MODEL` | Yes* | LLM model name (*required for AI analysis) |
 | `CORS_ORIGINS` | Yes | Frontend URL(s), comma-separated |
@@ -159,10 +158,10 @@ Then configure your GitHub webhook with the ngrok URL. Or test locally with the 
 ## Tech Stack
 
 | Layer | Technology |
-|-------|------------|
+| --- | --- |
 | **Backend** | Python 3.12, FastAPI, Uvicorn |
 | **Frontend** | React, shadcn/ui, Tailwind CSS |
-| **Database** | SQLite (local) / MongoDB Atlas (production) |
+| **Database** | SQLite natively |
 | **AI** | Ollama (local), OpenAI-compatible providers |
 | **Deployment** | Docker, Docker Compose, GHCR |
 | **Testing** | pytest, requests |
@@ -171,7 +170,7 @@ Then configure your GitHub webhook with the ngrok URL. Or test locally with the 
 
 ## Project Structure
 
-```
+```text
 DR.Code-v2/
 ├── backend/
 │   ├── server.py              # FastAPI application (all endpoints)
@@ -214,10 +213,3 @@ MIT License — see [LICENSE](LICENSE) for details.
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Backend: FastAPI](https://img.shields.io/badge/Backend-FastAPI-blue.svg)](https://fastapi.tiangolo.com)
 [![Frontend: React](https://img.shields.io/badge/Frontend-React-blue.svg)](https://reactjs.org)
-
-
-[![Tests Passing](https://img.shields.io/badge/tests-65%2F65-brightgreen.svg)](https://github.com/whoshotu/Dr.Code-II/actions)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Backend: FastAPI](https://img.shields.io/badge/Backend-FastAPI-blue.svg)](https://fastapi.tiangolo.com)
-[![Frontend: React](https://img.shields.io/badge/Frontend-React-blue.svg)](https://reactjs.org)
-
