@@ -19,5 +19,5 @@ services:
       retries: 3
       start_period: 40s
 
-# Note: MongoDB and Frontend services removed for 'Judge-Ready' zero-config mode.
+# Note: Auxiliary services removed for 'Judge-Ready' zero-config mode.
 # The app now runs as a single self-contained unit on port 8002.

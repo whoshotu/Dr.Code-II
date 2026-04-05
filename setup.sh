@@ -20,32 +20,32 @@ check_with_timeout() {
     return $?
 }
 
-detect_mongo() {
-    # Check 1: Localhost socket
-    if check_with_timeout "curl -sf http://localhost:27017 &>/dev/null"; then
-        MONGO_URL="mongodb://localhost:27017"
-        echo -e "${GREEN}✓ MongoDB detected on localhost:27017${NC}"
-        return 0
-    fi
-    
-    # Check 2: Docker container named "mongo" or "mongodb"
-    local container_name
-    container_name=$(docker ps --format "{{.Names}}" 2>/dev/null | grep -E "^mongo(db)?$" | head -1)
-    if [ -n "$container_name" ]; then
-        MONGO_URL="mongodb://mongo:27017"
-        echo -e "${GREEN}✓ MongoDB detected in Docker container (${container_name})${NC}"
-        return 0
-    fi
-    
-    echo -e "${YELLOW}⚠ No MongoDB detected${NC}"
-    return 1
-}
 
 detect_ollama() {
-    # Check 1: Localhost HTTP endpoint (with timeout)
-    if check_with_timeout "curl -sf http://localhost:11434/api/tags &>/dev/null"; then
+    # Check 1: Native Ollama CLI
+    if command -v ollama &> /dev/null; then
+        if ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
+            echo -e "${YELLOW}Starting local Ollama server in background...${NC}"
+            ollama serve >/dev/null 2>&1 &
+            sleep 3
+        fi
         OLLAMA_BASE_URL="http://localhost:11434"
-        echo -e "${GREEN}✓ Ollama detected on localhost:11434${NC}"
+        echo -e "${GREEN}✓ Ollama is running locally on localhost:11434${NC}"
+
+        # Count available models (subtract 1 for the header line)
+        local model_count=$(ollama list | tail -n +2 | grep -v "^$" | wc -l)
+        if [ "$model_count" -eq 0 ]; then
+            echo -e "${YELLOW}⚠ No models found locally.${NC}"
+            read -p "Would you like to install a quick coding model (qwen2.5-coder:7b)? [y/N]: " install_model
+            if [[ "$install_model" =~ ^[Yy]$ ]]; then
+                echo -e "${CYAN}Installing model... this may take a few minutes.${NC}"
+                ollama pull qwen2.5-coder:7b
+                OLLAMA_MODEL="qwen2.5-coder:7b"
+            fi
+        else
+            echo -e "${GREEN}Available Ollama models:${NC}"
+            ollama list
+        fi
         return 0
     fi
     
@@ -78,13 +78,6 @@ detect_all_deps() {
     echo -e "${CYAN}Detecting dependencies...${NC}"
     local deps_found=0
     
-    # Try MongoDB
-    if detect_mongo; then
-        deps_found=$((deps_found + 1))
-    else
-        echo "  → Configure MongoDB later via Settings UI"
-    fi
-    
     # Try Ollama
     if detect_ollama; then
         deps_found=$((deps_found + 1))
@@ -93,7 +86,7 @@ detect_all_deps() {
     fi
     
     # Auto-configure defaults if all found
-    if [ $deps_found -eq 2 ]; then
+    if [ $deps_found -eq 1 ]; then
         echo ""
         echo -e "${GREEN}✅ Quick Start: dependencies found, auto-configuring...${NC}"
         return 0
@@ -129,8 +122,8 @@ setup_ai() {
     fi
     
     if [ -z "$OLLAMA_MODEL" ]; then
-        read -p "Enter model name [llama3.1:8b]: " OLLAMA_MODEL
-        OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.1:8b}
+        read -p "Enter model name [qwen2.5-coder:7b]: " OLLAMA_MODEL
+        OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5-coder:7b}
     fi
 }
 
@@ -162,9 +155,8 @@ save_config() {
     if [ "$USE_EXISTING_ENV" = false ]; then
         cat > .env << EOF
 # DR.CODE-v2 'Judge-Ready' Environment
-MONGO_URL=${MONGO_URL:-mongodb://localhost:27017}
 OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://localhost:11434}
-OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.1:8b}
+OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5-coder:7b}
 CORS_ORIGINS=http://localhost:3001
 DB_TYPE=sqlite
 EOF
@@ -183,9 +175,8 @@ EOF
     # Always generate .env.docker (for Docker Compose)
     cat > .env.docker << EOF
 # DR.CODE-v2 'Judge-Ready' Environment (Docker)
-MONGO_URL=${MONGO_URL:-mongodb://mongo:27017}
 OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.1:8b}
+OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5-coder:7b}
 CORS_ORIGINS=http://localhost:3001
 DB_TYPE=sqlite
 EOF
@@ -231,7 +222,6 @@ print_summary() {
     echo "  Service Endpoints:"
     echo "    - Backend API: http://localhost:8002"
     echo "    - Frontend UI: http://localhost:3001"
-    echo "    - MongoDB: $MONGO_URL (auto-detected)"
     echo "    - Ollama: $OLLAMA_BASE_URL (auto-detected)"
     echo "    - Model: $OLLAMA_MODEL"
     echo "  "
