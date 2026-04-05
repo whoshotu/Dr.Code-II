@@ -1,6 +1,6 @@
 services:
   drcode-hub:
-    image: ghcr.io/whoshotu/dr-code-v2-backend:latest
+    image: ghcr.io/whoshotu/dr-code-ii-backend:latest
     container_name: drcode-hub
     ports:
       - "8002:8002"
