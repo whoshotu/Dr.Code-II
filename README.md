@@ -215,3 +215,9 @@ MIT License — see [LICENSE](LICENSE) for details.
 [![Backend: FastAPI](https://img.shields.io/badge/Backend-FastAPI-blue.svg)](https://fastapi.tiangolo.com)
 [![Frontend: React](https://img.shields.io/badge/Frontend-React-blue.svg)](https://reactjs.org)
 
+
+[![Tests Passing](https://img.shields.io/badge/tests-65%2F65-brightgreen.svg)](https://github.com/whoshotu/Dr.Code-II/actions)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Backend: FastAPI](https://img.shields.io/badge/Backend-FastAPI-blue.svg)](https://fastapi.tiangolo.com)
+[![Frontend: React](https://img.shields.io/badge/Frontend-React-blue.svg)](https://reactjs.org)
+
