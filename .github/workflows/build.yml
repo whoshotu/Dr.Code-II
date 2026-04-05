@@ -43,7 +43,7 @@ jobs:
           context: .
           file: ./backend/Dockerfile
           push: true
-          tags: ghcr.io/whoshotu/dr-code-v2-backend:latest
+          tags: ghcr.io/${{ github.repository_owner }}/dr-code-ii-backend:latest
           no-cache: true
       
       - name: Build and Push Frontend
@@ -52,7 +52,7 @@ jobs:
           context: .
           file: ./frontend/Dockerfile
           push: true
-          tags: ghcr.io/whoshotu/dr-code-v2-frontend:latest
+          tags: ghcr.io/${{ github.repository_owner }}/dr-code-ii-frontend:latest
           no-cache: true
         env:
           REACT_APP_BACKEND_URL: ${{ secrets.REACT_APP_BACKEND_URL }}
@@ -82,7 +82,7 @@ jobs:
           context: .
           file: ./backend/Dockerfile
           push: false
-          tags: ghcr.io/whoshotu/dr-code-v2-backend:pr-${{ github.event.pull_request.number }}
+          tags: ghcr.io/${{ github.repository_owner }}/dr-code-ii-backend:pr-${{ github.event.pull_request.number }}
           load: true
       
       - name: Build Frontend
@@ -91,7 +91,7 @@ jobs:
           context: .
           file: ./frontend/Dockerfile
           push: false
-          tags: ghcr.io/whoshotu/dr-code-v2-frontend:pr-${{ github.event.pull_request.number }}
+          tags: ghcr.io/${{ github.repository_owner }}/dr-code-ii-frontend:pr-${{ github.event.pull_request.number }}
           load: true
 
   success:
@@ -105,5 +105,5 @@ jobs:
           echo "✅ Build complete!"
           echo ""
           echo "Pre-built images:"
-          echo "  ghcr.io/whoshotu/dr-code-v2-backend:latest"
-          echo "  ghcr.io/whoshotu/dr-code-v2-frontend:latest"
+          echo "  ghcr.io/${{ github.repository_owner }}/dr-code-ii-backend:latest"
+          echo "  ghcr.io/${{ github.repository_owner }}/dr-code-ii-frontend:latest"
