@@ -1,18 +1,30 @@
-import aiosqlite
+"""SQLite database adapter for DR.CODE-v2."""
 import json
 from typing import Any
 
+import aiosqlite
+
+
 class SQLiteCollection:
+    """A single table/collection abstraction over SQLite."""
     def __init__(self, db_path: str, table_name: str):
         self.db_path = db_path
         self.table_name = table_name
 
-    async def _init_table(self):
+    async def init_table(self):
+        """Initialize table for this collection if it does not exist."""
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(f"CREATE TABLE IF NOT EXISTS {self.table_name} (id TEXT PRIMARY KEY, data TEXT)")
+            await db.execute(
+                f"CREATE TABLE IF NOT EXISTS {self.table_name} "
+                "(id TEXT PRIMARY KEY, data TEXT)"
+            )
             await db.commit()
 
+    # Preserve backward compatibility per AGENTS.md requirements
+    _init_table = init_table
+
     async def insert_one(self, document: dict[str, Any]):
+        """Insert a single document into the collection."""
         doc_id = (
             document.get("id")
             or document.get("report_id")
@@ -27,7 +39,12 @@ class SQLiteCollection:
             await db.commit()
         return MagicResult(doc_id)
 
-    async def find_one(self, query_filter: dict[str, Any], projection: dict[str, Any] | None = None):
+    async def find_one(
+        self,
+        query_filter: dict[str, Any],
+        projection: dict[str, Any] | None = None
+    ):
+        """Find a single document matching the given query filter."""
         # Simplified Mongo-to-SQL filter: resolve known document ID fields
         doc_id = (
             query_filter.get("id")
@@ -51,7 +68,13 @@ class SQLiteCollection:
                     return doc
         return None
 
-    async def update_one(self, query_filter: dict[str, Any], update: dict[str, Any], upsert: bool = False):
+    async def update_one(
+        self,
+        query_filter: dict[str, Any],
+        update: dict[str, Any],
+        upsert: bool = False
+    ):
+        """Update a single document matching the query filter."""
         doc_id = (
             query_filter.get("id")
             or query_filter.get("report_id")
@@ -83,12 +106,27 @@ class SQLiteCollection:
             )
             await db.commit()
 
-    def find(self, query_filter: dict[str, Any] | None = None, projection: dict[str, Any] | None = None):
-        return SQLiteCursor(self.db_path, self.table_name, query_filter or {}, projection or {})
+    def find(
+        self,
+        query_filter: dict[str, Any] | None = None,
+        projection: dict[str, Any] | None = None
+    ):
+        """Find multiple documents matching the query filter."""
+        return SQLiteCursor(
+            self.db_path, self.table_name, query_filter or {}, projection or {}
+        )
 
 
 class SQLiteCursor:
-    def __init__(self, db_path: str, table_name: str, query_filter: dict[str, Any], projection: dict[str, Any]):
+    """Cursor-like object for SQLite queries."""
+
+    def __init__(
+        self,
+        db_path: str,
+        table_name: str,
+        query_filter: dict[str, Any],
+        projection: dict[str, Any]
+    ):
         self.db_path = db_path
         self.table_name = table_name
         self.query_filter = query_filter or {}
@@ -97,12 +135,15 @@ class SQLiteCursor:
         self._limit = None
 
     def sort(self, key: str, direction: int = -1):
+        """Sort the resulting documents by a specific key."""
         self._sort = (key, direction)
         return self
 
     async def to_list(self, length: int = 100):
+        """Return the resulting documents as a list."""
         sql = f"SELECT data FROM {self.table_name}"
-        # We don't implement complex SQL filtering here, we filter in Python for ease of migration
+        # We do not implement complex SQL filtering here.
+        # We filter in Python for ease of migration.
         async with aiosqlite.connect(self.db_path) as db:
             async with db.execute(sql) as cursor:
                 rows = await cursor.fetchall()
@@ -111,25 +152,32 @@ class SQLiteCursor:
         # Simple sorting in Python
         if self._sort:
             key, direction = self._sort
-            results.sort(key=lambda x: x.get(key, ""), reverse=(direction == -1))
+            results.sort(key=lambda x: x.get(key, ""), reverse=direction == -1)
 
         return results[:length]
 
+
+# pylint: disable=too-few-public-methods
 class MagicResult:
+    """A wrapper mimicking MongoDB's InsertOneResult."""
     def __init__(self, inserted_id):
         self.inserted_id = inserted_id
 
+
 class SQLiteDatabase:
+    """Main database abstraction providing access to multiple collections."""
     def __init__(self, db_path: str):
         self.db_path = db_path
         self._collections = {}
 
     def __getattr__(self, name):
+        """Get or create the collection abstraction by name."""
         if name not in self._collections:
             self._collections[name] = SQLiteCollection(self.db_path, name)
         return self._collections[name]
 
     async def init_all(self):
+        """Initialize all known foundational tables in the database."""
         # List of tables to initialize
         tables = [
             "app_settings", "governance_audit_logs", "governance_policies",
@@ -137,4 +185,4 @@ class SQLiteDatabase:
             "repository_sessions", "security_events"
         ]
         for t in tables:
-            await self.__getattr__(t)._init_table()
+            await getattr(self, t).init_table()
