@@ -1,19 +1,19 @@
-# DR.CODE-v2
+# Dr.Code-II
 
 > AI-powered code quality analysis with automated fix suggestions and GitHub PR integration.
 
-[![Test](https://github.com/whoshotu/DR.Code-v2/actions/workflows/test.yml/badge.svg)](https://github.com/whoshotu/DR.Code-v2/actions/workflows/test.yml)
-[![Build](https://github.com/whoshotu/DR.Code-v2/actions/workflows/build.yml/badge.svg)](https://github.com/whoshotu/DR.Code-v2/actions/workflows/build.yml)
+[![Test](https://github.com/whoshotu/Dr.Code-II/actions/workflows/test.yml/badge.svg)](https://github.com/whoshotu/Dr.Code-II/actions/workflows/test.yml)
+[![Build](https://github.com/whoshotu/Dr.Code-II/actions/workflows/build.yml/badge.svg)](https://github.com/whoshotu/Dr.Code-II/actions/workflows/build.yml)
 
 ---
 
 ## Overview
 
-DR.CODE-v2 is a self-hosted AI code review platform that analyzes pull requests, detects security risks and anti-patterns, and posts structured inline comments back to GitHub — all powered by a local LLM. No code leaves your infrastructure.
+Dr.Code-II is a self-hosted AI code review platform that analyzes pull requests, detects security risks and anti-patterns, and posts structured inline comments back to GitHub — all powered by a local LLM. No code leaves your infrastructure.
 
 ## The Problem
 
-Code review is slow, inconsistent, and security issues slip through. Existing tools either require sending code to external SaaS platforms or lack the contextual understanding that a local LLM provides. DR.CODE-v2 solves this by running entirely on your own machine or server.
+Code review is slow, inconsistent, and security issues slip through. Existing tools either require sending code to external SaaS platforms or lack the contextual understanding that a local LLM provides. Dr.Code-II solves this by running entirely on your own machine or server.
 
 ## What It Does
 
@@ -33,7 +33,7 @@ GitHub PR ──webhook──▶ FastAPI Backend ──▶ Rule-based Detection 
                       React Dashboard
 ```
 
-1. **Webhook received** — GitHub notifies DR.CODE when a PR is opened or updated
+1. **Webhook received** — GitHub notifies Dr.Code-II when a PR is opened or updated
 2. **Files fetched** — Changed files are retrieved via the GitHub API
 3. **Analysis runs** — Rule-based detection catches known patterns; a local LLM adds contextual analysis
 4. **Comments posted** — Structured review comments appear on the exact lines with fix suggestions
@@ -58,12 +58,12 @@ GitHub PR ──webhook──▶ FastAPI Backend ──▶ Rule-based Detection 
 ### One-Command Setup (Recommended)
 
 ```bash
-git clone https://github.com/whoshotu/DR.Code-v2.git
-cd DR.Code-v2
+git clone https://github.com/whoshotu/Dr.Code-II.git
+cd Dr.Code-II
 ./setup.sh
 ```
 
-The setup script auto-detects Docker and manages Ollama automatically, pulling the default coding model (`qwen2.5-coder:7b`) if required, then starts everything. Access the dashboard at **<http://localhost:3001>**.
+The setup script auto-detects Docker and manages Ollama detection. If no coding model is found, it will prompt to install the recommended model (`qwen2.5-coder:7b`) before starting everything. Access the dashboard at **<http://localhost:3001>**.
 
 ### Using the Makefile
 
@@ -130,14 +130,14 @@ All variables are documented in `.env.example`. The key ones:
 
 ## GitHub Webhook Integration
 
-DR.CODE can automatically review pull requests when configured with a GitHub webhook:
+Dr.Code-II can automatically review pull requests when configured with a GitHub webhook:
 
 1. **Create a GitHub PAT** with `repo` and `pull_requests:write` scopes
 2. **Add the token** in Settings → GitHub Integration
 3. **Configure a webhook** on your repository pointing to `https://<your-url>/api/integrations/git/webhook`
 4. **(Optional)** Set a webhook secret for HMAC signature verification
 
-When a PR is opened or updated, DR.CODE fetches the changed files, analyzes them, and posts inline review comments with fix suggestions.
+When a PR is opened or updated, Dr.Code-II fetches the changed files, analyzes them, and posts inline review comments with fix suggestions.
 
 ### Testing Webhooks Locally
 
@@ -171,7 +171,7 @@ Then configure your GitHub webhook with the ngrok URL. Or test locally with the 
 ## Project Structure
 
 ```text
-DR.Code-v2/
+Dr.Code-II/
 ├── backend/
 │   ├── server.py              # FastAPI application (all endpoints)
 │   ├── database_sqlite.py     # SQLite adapter with Mongo-compatible API
