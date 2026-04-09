@@ -1,5 +1,12 @@
 from pathlib import Path
 import sys
+import os
+
+# Add project root to sys.path to allow 'from backend.xxx' imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
 import asyncio
 import base64
@@ -36,9 +43,6 @@ from backend.generators.docstring_generator import generate_docstrings
 from backend.generators.test_generator import generate_tests
 from backend.local_provider import call_provider_local
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 # --- Constants ---
 ISSUE_SQL_INJECTION = "SQL Injection Risk"
@@ -2727,8 +2731,8 @@ async def health():
 )
 async def analyze_endpoint(
     payload: AnalyzeRequest,
-    x_actor_id: Annotated[str | None, Header(default=None)] = None,
-    x_user_role: Annotated[str | None, Header(default=None)] = None,
+    x_actor_id: Annotated[str | None, Header()] = None,
+    x_user_role: Annotated[str | None, Header()] = None,
 ):
     started_at = perf_counter()
     actor = resolve_actor_context(x_actor_id, x_user_role)
@@ -3274,8 +3278,8 @@ async def get_governance_policy():
 )
 async def update_governance_policy(
     payload: GovernancePolicyUpdate,
-    x_actor_id: Annotated[str | None, Header(default=None)] = None,
-    x_user_role: Annotated[str | None, Header(default=None)] = None,
+    x_actor_id: Annotated[str | None, Header()] = None,
+    x_user_role: Annotated[str | None, Header()] = None,
 ):
     actor = resolve_actor_context(x_actor_id, x_user_role)
     require_admin(actor)
@@ -3841,8 +3845,8 @@ async def run_github_pr_pipeline(
 )
 async def git_webhook(
     request: Request,
-    x_hub_signature_256: Annotated[str | None, Header(default=None)] = None,
-    x_github_event: Annotated[str | None, Header(default=None)] = None,
+    x_hub_signature_256: Annotated[str | None, Header()] = None,
+    x_github_event: Annotated[str | None, Header()] = None,
 ):
     raw_body = await request.body()
     try:
