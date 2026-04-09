@@ -135,6 +135,11 @@ jobs:
             sleep 2
           done
       
+      - name: Pull CI model
+        run: |
+          echo "Pulling llama3.2..."
+          curl -s -X POST http://localhost:11434/api/pull -d '{"name": "llama3.2"}' > /dev/null
+      
       - name: Start backend server
         run: |
           cd backend

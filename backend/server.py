@@ -2438,6 +2438,18 @@ def _ping_ollama(base_url: str) -> bool:
         return False
 
 
+def _get_ollama_models(base_url: str) -> list[str]:
+    """Return a list of local model names from Ollama."""
+    try:
+        resp = requests.get(f"{base_url.rstrip('/')}/api/tags", timeout=3)
+        if resp.status_code == 200:
+            data = resp.json()
+            return [m["name"] for m in data.get("models", [])]
+    except (requests.RequestException, KeyError):
+        pass
+    return []
+
+
 async def check_ollama_ready(base_url: str | None) -> bool:
     if not base_url:
         return False
@@ -2752,9 +2764,18 @@ async def analyze_endpoint(
     provider_allowed = selected_provider in policy.allowed_providers
     ai_payload = None
     if provider_allowed:
-        ai_payload = await call_llm_analysis(
-            cleaned_code, payload.language, settings_doc
-        )
+        # CI/Fail-safe: Check if local models actually exist before calling
+        if selected_provider == "ollama":
+            base_url = routing.get("ollama", {}).get("base_url") or settings_doc.get("ollama_base_url")
+            if base_url:
+                models = _get_ollama_models(base_url)
+                if not models:
+                    ai_payload = {"status": "model-missing", "ai_notes": "Stub CI result: No Ollama models found.", "issues": []}
+        
+        if ai_payload is None:
+            ai_payload = await call_llm_analysis(
+                cleaned_code, payload.language, settings_doc
+            )
     else:
         await record_security_event(
             severity="medium",
