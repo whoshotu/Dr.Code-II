@@ -96,10 +96,6 @@ jobs:
     runs-on: ubuntu-latest
     
     services:
-      mongodb:
-        image: mongo:7
-        ports:
-          - 27017:27017
       ollama:
         image: ollama/ollama:latest
         ports:
@@ -121,8 +117,7 @@ jobs:
       
       - name: Set environment variables
         run: |
-          echo "MONGO_URL=mongodb://localhost:27017/drcode" >> $GITHUB_ENV
-          echo "DB_NAME=drcode" >> $GITHUB_ENV
+          echo "DB_TYPE=sqlite" >> $GITHUB_ENV
           echo "CORS_ORIGINS=http://localhost:3000" >> $GITHUB_ENV
           echo "OLLAMA_BASE_URL=${{ secrets.OLLAMA_BASE_URL }}" >> $GITHUB_ENV
           echo "OLLAMA_MODEL=${{ secrets.OLLAMA_MODEL }}" >> $GITHUB_ENV
@@ -130,16 +125,6 @@ jobs:
       
       - name: Wait for services
         run: |
-          echo "Waiting for MongoDB..."
-          for i in {1..30}; do
-            if curl -s mongodb://localhost:27017 >/dev/null 2>&1; then
-              echo "MongoDB is ready!"
-              break
-            fi
-            echo "Waiting for MongoDB... ($i/30)"
-            sleep 2
-          done
-          
           echo "Waiting for Ollama..."
           for i in {1..60}; do
             if curl -s http://localhost:11434/api/tags >/dev/null 2>&1; then

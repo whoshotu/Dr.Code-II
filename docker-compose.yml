@@ -1,7 +1,21 @@
 services:
-  drcode-hub:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./ollama_data:/root/.ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
     image: ghcr.io/whoshotu/dr-code-ii-backend:latest
-    container_name: drcode-hub
+    container_name: drcode-backend
     ports:
       - "${BACKEND_PORT:-8002}:${BACKEND_PORT:-8002}"
     env_file:
@@ -10,6 +24,7 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./backend:/app
+      - ./data:/app/data
     entrypoint: ["sh", "-c", "pip install --no-cache-dir -r requirements.txt && uvicorn server:app --host 0.0.0.0 --port ${BACKEND_PORT:-8002}"]
     restart: unless-stopped
     healthcheck:
@@ -19,7 +34,7 @@ services:
       retries: 3
       start_period: 40s
 
-  drcode-frontend:
+  frontend:
     image: ghcr.io/whoshotu/dr-code-ii-frontend:latest
     container_name: drcode-frontend
     ports:
@@ -27,8 +42,8 @@ services:
     env_file:
       - .env.docker
     depends_on:
-      - drcode-hub
+      - backend
     restart: unless-stopped
 
-# Note: Auxiliary services removed for 'Judge-Ready' zero-config mode.
-# The app now runs as a single self-contained unit on port 8002.
+# SQLite-native architecture: no additional database services required.
+# Persistent data stored in ./data volume via SQLite.

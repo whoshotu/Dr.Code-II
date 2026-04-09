@@ -189,7 +189,13 @@ start_services() {
     echo ""
     echo -e "${CYAN}Starting DR.CODE services...${NC}"
     if docker compose version &>/dev/null; then COMPOSE_CMD="docker compose"; else COMPOSE_CMD="docker-compose"; fi
-    $COMPOSE_CMD up -d
+    
+    if [ "$USE_OLLAMA" = true ]; then
+        echo "Starting local Ollama container..."
+        $COMPOSE_CMD up -d ollama
+    fi
+    
+    $COMPOSE_CMD up -d backend frontend
 }
 
 run_health_checks() {
