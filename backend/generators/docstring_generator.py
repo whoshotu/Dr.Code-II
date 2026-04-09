@@ -13,7 +13,7 @@ def build_docstring_prompt(
     functions: list[Any],
 ) -> str:
     lang = language.lower()
-    
+
     style_info = {
         "google": "Google style: Args:, Returns:, Raises:",
         "numpy": "NumPy style: Parameters, Returns with types",

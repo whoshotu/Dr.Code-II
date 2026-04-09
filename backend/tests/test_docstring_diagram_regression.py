@@ -40,7 +40,7 @@ def add(a, b):
 '''
         code = "def add(a, b): return a + b"
         result = generate_docstrings(code, "python", "google")
-        
+
         assert result["success"] is True
         assert "add" in result["functions_documented"]
         assert "def add" in result["documented_code"]
@@ -50,14 +50,14 @@ def add(a, b):
         mock_llm.return_value = None
         code = "def add(a, b): return a + b"
         result = generate_docstrings(code, "python", "google")
-        
+
         assert result["success"] is False
         assert "LLM unavailable" in result["error"]
 
     def test_generate_docstrings_no_functions(self):
         code = "x = 1"
         result = generate_docstrings(code, "python", "google")
-        
+
         assert result["success"] is False
         assert "No functions found" in result["error"]
 
@@ -78,7 +78,7 @@ class TestGenerateDiagram:
     B-->>A: Hi"""
         code = "def add(a, b): return a + b"
         result = generate_diagram(code, "python", "sequence")
-        
+
         assert result["success"] is True
         assert "sequenceDiagram" in result["diagram_syntax"]
 
@@ -90,7 +90,7 @@ sequenceDiagram
 ```"""
         code = "def add(a, b): return a + b"
         result = generate_diagram(code, "python", "sequence")
-        
+
         assert result["success"] is True
         assert not result["diagram_syntax"].startswith("```")
 
@@ -99,13 +99,13 @@ sequenceDiagram
         mock_llm.return_value = None
         code = "def add(a, b): return a + b"
         result = generate_diagram(code, "python", "sequence")
-        
+
         assert result["success"] is False
         assert "LLM unavailable" in result["error"]
 
     def test_generate_diagram_no_functions(self):
         code = "x = 1"
         result = generate_diagram(code, "python", "sequence")
-        
+
         assert result["success"] is False
         assert "No functions found" in result["error"]

@@ -2,6 +2,7 @@
 Webhook pipeline regression tests for DR.CODE-v2
 Tests: signature verification, graceful degradation, real PR payload structure
 """
+
 import hmac
 import hashlib
 import os
@@ -51,6 +52,7 @@ MOCK_PR_PAYLOAD = {
 def _generate_hmac_signature(payload: dict, secret: str) -> str:
     """Generate valid HMAC-SHA256 signature for a payload."""
     import json
+
     body = json.dumps(payload).encode("utf-8")
     sig = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
     return f"sha256={sig}"
@@ -60,7 +62,10 @@ class TestWebhookSignatureVerification:
     def test_webhook_accepts_without_secret_configured(self, api_client, base_url):
         """When GITHUB_WEBHOOK_SECRET is unset, webhook must process normally."""
         # Clear any existing token and secret first
-        api_client.put(f"{base_url}/api/settings/github", json={"clear_token": True, "webhook_secret": ""})
+        api_client.put(
+            f"{base_url}/api/settings/github",
+            json={"clear_token": True, "webhook_secret": ""},
+        )
 
         resp = api_client.post(
             f"{base_url}/api/integrations/git/webhook",
@@ -75,7 +80,10 @@ class TestWebhookSignatureVerification:
     def test_webhook_rejects_invalid_signature(self, api_client, base_url):
         """When secret IS set, invalid HMAC signature must return 401."""
         # Clear first, then set a webhook secret
-        api_client.put(f"{base_url}/api/settings/github", json={"clear_token": True, "webhook_secret": ""})
+        api_client.put(
+            f"{base_url}/api/settings/github",
+            json={"clear_token": True, "webhook_secret": ""},
+        )
         resp = api_client.put(
             f"{base_url}/api/settings/github",
             json={"webhook_secret": "test-secret-123"},
@@ -99,7 +107,10 @@ class TestWebhookSignatureVerification:
     def test_webhook_accepts_valid_hmac_signature(self, api_client, base_url):
         """Valid HMAC-SHA256 signature must be accepted."""
         # Clear first
-        api_client.put(f"{base_url}/api/settings/github", json={"clear_token": True, "webhook_secret": ""})
+        api_client.put(
+            f"{base_url}/api/settings/github",
+            json={"clear_token": True, "webhook_secret": ""},
+        )
         secret = "valid-test-secret-" + str(uuid.uuid4())[:8]
         api_client.put(
             f"{base_url}/api/settings/github",

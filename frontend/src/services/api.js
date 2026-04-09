@@ -108,4 +108,16 @@ export const api = {
     const { data } = await client.post("/repository/analyze-local", { path });
     return data;
   },
+  resetAnalysis: async () => {
+    const { data } = await client.post("/reset-analysis");
+    return data;
+  },
+  trashFile: async (fileId) => {
+    const { data } = await client.delete(`/trash-file/${fileId}`);
+    return data;
+  },
+  getTrashContents: async () => {
+    const { data } = await client.get("/trash");
+    return data;
+  },
 };

@@ -8,6 +8,7 @@ const navItems = [
   { label: "Governance", to: "/governance", icon: ShieldCheck, testId: "nav-governance-link" },
   { label: "Integrations", to: "/integrations", icon: PlugZap, testId: "nav-integrations-link" },
   { label: "Settings", to: "/settings", icon: Settings, testId: "nav-settings-link" },
+  { label: "Archive", to: "/trash", icon: Bug, testId: "nav-trash-link" },
 ];
 
 export const AppShell = () => {
@@ -20,7 +21,7 @@ export const AppShell = () => {
               <Bug className="h-3.5 w-3.5" />
               Code Surgeon
             </div>
-            <h1 className="text-3xl font-bold tracking-tight" data-testid="app-title">Slop & Code Doctor</h1>
+            <h1 className="text-3xl font-bold tracking-tight" data-testid="app-title">Dr.Code-II</h1>
             <p className="text-sm text-muted-foreground" data-testid="app-subtitle">
               AI-powered code diagnostics with tactical fixes.
             </p>

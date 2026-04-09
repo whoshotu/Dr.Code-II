@@ -158,7 +158,7 @@ def test_add():
 """
         code = "def add(a, b): return a + b"
         result = generate_tests(code, "python", "pytest", True)
-        
+
         assert result["success"] is True
         assert result["test_count"] == 1
         assert "def test_add" in result["test_code"]
@@ -169,14 +169,14 @@ def test_add():
         mock_llm.return_value = None
         code = "def add(a, b): return a + b"
         result = generate_tests(code, "python", "pytest", True)
-        
+
         assert result["success"] is False
         assert "LLM unavailable" in result["error"]
 
     def test_generate_tests_no_functions(self):
         code = "x = 1"
         result = generate_tests(code, "python", "pytest", True)
-        
+
         assert result["success"] is False
         assert "No functions found" in result["error"]
 
@@ -185,6 +185,6 @@ def test_add():
         mock_llm.return_value = "def test(: invalid syntax here!!!"
         code = "def add(a, b): return a + b"
         result = generate_tests(code, "python", "pytest", True)
-        
+
         assert result["success"] is False
         assert "syntax errors" in result["error"]

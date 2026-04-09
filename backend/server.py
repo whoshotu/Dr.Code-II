@@ -1,13 +1,9 @@
-import sys
 from pathlib import Path
-
-# Ensure the parent directory is in sys.path for absolute 'backend.*' imports
-_root = str(Path(__file__).parent.parent)
-if _root not in sys.path:
-    sys.path.append(_root)
+import sys
 
 import asyncio
 import base64
+import binascii
 import hashlib
 import hmac
 import io
@@ -22,7 +18,7 @@ import uuid
 import zipfile
 from datetime import datetime, timezone
 from time import perf_counter
-from typing import Any
+from typing import Any, Annotated
 
 import requests
 from cryptography.fernet import Fernet, InvalidToken
@@ -33,11 +29,32 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 from starlette.middleware.cors import CORSMiddleware
 
+# Moved imports to facilitate top-level package resolution
 from backend.database_sqlite import SQLiteDatabase
 from backend.generators.diagram_generator import generate_diagram
 from backend.generators.docstring_generator import generate_docstrings
 from backend.generators.test_generator import generate_tests
 from backend.local_provider import call_provider_local
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+# --- Constants ---
+ISSUE_SQL_INJECTION = "SQL Injection Risk"
+ISSUE_WEAK_CRYPTO = "Weak Cryptography"
+ISSUE_COMMAND_INJECTION = "Command Injection"
+ISSUE_PATH_TRAVERSAL = "Path Traversal Risk"
+ISSUE_INSECURE_RANDOM = "Insecure Randomness"
+ISSUE_INSECURE_DESERIAL = "Insecure Deserialization"
+SUGGESTION_MASK_DATA = "Remove or mask sensitive data."
+ERROR_SESSION_NOT_FOUND = "Repository session not found"
+ERROR_GENERATION_FAILED = "Error message if generation failed"
+CONTENT_TYPE_JSON = "application/json"
+DEFAULT_OLLAMA_URL = "http://localhost:11434"
+MSG_REPO_ANALYZED = "analyzed"
+STATUS_SUCCESS = "success"
+STATUS_ERROR = "error"
 
 # --- Environment & Roots ---
 ROOT_DIR = Path(__file__).parent
@@ -45,10 +62,7 @@ load_dotenv(ROOT_DIR / ".env")
 
 # --- SQLite Migration: No longer using MongoDB for 'Judge-Ready' mode ---
 db = SQLiteDatabase(str(ROOT_DIR / "drcode.db"))
-mongo_url = "sqlite://local"  # Dummy for backward compat in logs
-
-# --- Constants ---
-DEFAULT_OLLAMA_URL = "http://localhost:11434"
+MONGO_URL = "sqlite://local"  # Standardized naming
 
 
 def discover_ollama_url() -> tuple[str, str]:
@@ -56,7 +70,11 @@ def discover_ollama_url() -> tuple[str, str]:
     _logger = logging.getLogger(__name__)
 
     # 1. Try localhost first (works in CI and local), then docker internal
-    for url in [DEFAULT_OLLAMA_URL, "http://host.docker.internal:11434", "http://ollama:11434"]:
+    for url in [
+        DEFAULT_OLLAMA_URL,
+        "http://host.docker.internal:11434",
+        "http://ollama:11434",
+    ]:
         try:
             r = requests.get(f"{url}/api/tags", timeout=3)
             if r.ok:
@@ -78,16 +96,25 @@ def discover_ollama_url() -> tuple[str, str]:
 
 app = FastAPI(title="DR.CODE v2")
 
+
 @app.on_event("startup")
 async def startup_db():
     await db.init_all()
 
+
 api_router = APIRouter(prefix="/api")
+
 
 class LocalAnalysisRequest(BaseModel):
     path: str
 
-@api_router.post("/repository/analyze-local")
+
+@api_router.post(
+    "/repository/analyze-local",
+    responses={
+        400: {"description": "Invalid directory path or no supported files found"}
+    },
+)
 async def analyze_local_folder(req: LocalAnalysisRequest):
     """Analyze a folder directly on the server's filesystem."""
     path = Path(req.path)
@@ -95,27 +122,17 @@ async def analyze_local_folder(req: LocalAnalysisRequest):
         raise HTTPException(status_code=400, detail="Invalid directory path")
 
     session_id = str(uuid.uuid4())
-    logger.info(f"Starting local analysis for: {path} (Session: {session_id})")
+    logging.getLogger(__name__).info(
+        "Starting local analysis for: %s (Session: %s)", path, session_id
+    )
 
     # Standard analysis pipeline for local files
-    files_to_analyze = []
-    for root, _, files in os.walk(path):
-        for file in files:
-            # Only include supported extensions
-            ext = Path(file).suffix
-            if ext.lower() in SUPPORTED_REPO_EXTENSIONS:
-                full_path = Path(root) / file
-                try:
-                    rel_path = full_path.relative_to(path)
-                    with open(full_path, "r", errors="ignore") as f:
-                        content = f.read()
-                        if content.strip():
-                            files_to_analyze.append({"path": str(rel_path), "content": content})
-                except Exception:
-                    continue
+    files_to_analyze = await _discover_local_files(path)
 
     if not files_to_analyze:
-        raise HTTPException(status_code=400, detail="No supported source files found in directory")
+        raise HTTPException(
+            status_code=400, detail="No supported source files found in directory"
+        )
 
     # Record session
     session = {
@@ -124,21 +141,87 @@ async def analyze_local_folder(req: LocalAnalysisRequest):
         "created_at": datetime.now(timezone.utc).isoformat(),
         "files": files_to_analyze,
         "file_count": len(files_to_analyze),
-        "status": "completed",
+        "status": MSG_REPO_ANALYZED,
         "summary": f"Local analysis of {path.name}",
         "fixes": [],
-        "applied_fix_count": 0
+        "applied_fix_count": 0,
     }
     await db.repository_sessions.insert_one(session)
 
     return {"session_id": session_id, "file_count": len(files_to_analyze)}
 
 
+async def _discover_local_files(base_path: Path) -> list[dict[str, str]]:
+    """Helper to discover and read supported files recursively."""
+    discovered = []
+    for dir_path, _, files in os.walk(base_path):
+        for file_name in files:
+            if Path(file_name).suffix.lower() in SUPPORTED_REPO_EXTENSIONS:
+                full_path = Path(dir_path) / file_name
+                try:
+                    rel_path = full_path.relative_to(base_path)
+                    content = await asyncio.to_thread(
+                        full_path.read_text, encoding="utf-8", errors="ignore"
+                    )
+                    if content.strip():
+                        discovered.append({"path": str(rel_path), "content": content})
+                except (OSError, ValueError):
+                    continue
+    return discovered
+
+
+@api_router.post("/reset-analysis")
+async def reset_analysis():
+    """Archive everything to trash and clear active analysis tables."""
+    await db.move_all_to_trash()
+    await db.clear_analysis_tables()
+    return {"message": "Analysis state archived to trash"}
+
+
+@api_router.delete(
+    "/trash-file/{file_id}",
+    responses={404: {"description": "File or report not found in the primary tables"}},
+)
+async def trash_file(file_id: str):
+    """Soft-delete a specific report by moving it to the trash table."""
+    success = await db.move_to_trash(file_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="File/Report not found")
+    return {"message": "File moved to trash"}
+
+
+@api_router.get("/trash")
+async def list_trash():
+    """List all items currently in the trash."""
+    items = await db.get_trash_contents()
+    return items
+
+
 class SeverityThresholds(BaseModel):
-    critical: int = Field(default=85, ge=0, le=100)
-    high: int = Field(default=70, ge=0, le=100)
-    medium: int = Field(default=45, ge=0, le=100)
-    low: int = Field(default=0, ge=0, le=100)
+    critical: int = Field(
+        default=85,
+        ge=0,
+        le=100,
+        description="Minimum score to classify an issue as critical",
+    )
+    high: int = Field(
+        default=70,
+        ge=0,
+        le=100,
+        description="Minimum score to classify an issue as high severity",
+    )
+    medium: int = Field(
+        default=45,
+        ge=0,
+        le=100,
+        description="Minimum score to classify an issue as medium severity",
+    )
+    low: int = Field(
+        default=0,
+        ge=0,
+        le=100,
+        description="Minimum score to classify an issue as low severity",
+    )
 
     @model_validator(mode="after")
     def check_order(self):
@@ -186,103 +269,195 @@ DEFAULT_BASE_URLS = {
 
 
 class Issue(BaseModel):
-    issue_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    category: str
-    title: str
-    detail: str
-    severity: str
-    score: int
-    line_number: int | None = None
-    fix_suggestion: str
-    code_snippet: str | None = None
-    source: str = "rule"
-    confidence: float = 0.7
-    risk_tags: list[str] = Field(default_factory=list)
-    decision_trace: list[str] = Field(default_factory=list)
+    issue_id: str = Field(
+        default_factory=lambda: str(uuid.uuid4()),
+        description="Unique identifier for the issue",
+    )
+    category: str = Field(
+        ..., description="Logical category of the issue (e.g., security, style)"
+    )
+    title: str = Field(..., description="Short descriptive title of the issue")
+    detail: str = Field(
+        ..., description="Detailed explanation of the issue and its impact"
+    )
+    severity: str = Field(
+        ..., description="Severity level: critical, high, medium, or low"
+    )
+    score: int = Field(..., description="Numeric severity score (0-100)")
+    line_number: int | None = Field(
+        default=None, description="1-indexed line number where the issue was found"
+    )
+    fix_suggestion: str = Field(
+        ..., description="Proactive advice on how to resolve the issue"
+    )
+    code_snippet: str | None = Field(
+        default=None, description="The relevant snippet of code containing the issue"
+    )
+    source: str = Field(
+        default="rule", description="Detection source: rule or ai provider"
+    )
+    confidence: float = Field(
+        default=0.7, description="Detection confidence score (0.0-1.0)"
+    )
+    risk_tags: list[str] = Field(
+        default_factory=list, description="Categorical tags for risk classification"
+    )
+    decision_trace: list[str] = Field(
+        default_factory=list,
+        description="Internal trace explaining the detection logic",
+    )
 
 
 class AnalyzeRequest(BaseModel):
-    code: str = Field(min_length=1)
-    filename: str | None = "untitled"
-    language: str = "python"
+    code: str = Field(..., min_length=1, description="Source code to be analyzed")
+    filename: str | None = Field(
+        default="untitled", description="Optional name of the file being analyzed"
+    )
+    language: str = Field(
+        default="python", description="Programming language of the code snippet"
+    )
 
 
 class AnalysisReport(BaseModel):
-    report_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    created_at: str = Field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    report_id: str = Field(
+        default_factory=lambda: str(uuid.uuid4()),
+        description="Unique identifier for the generated report",
     )
-    filename: str
-    language: str
-    source_code: str
-    summary: str
-    issues: list[Issue]
-    documentation: str
-    ai_notes: str | None = None
-    mode: str
-    governance: dict[str, Any] = Field(default_factory=dict)
-    quality_checks: list[dict[str, Any]] = Field(default_factory=list)
-    monitoring: dict[str, Any] = Field(default_factory=dict)
+    created_at: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        description="ISO timestamp of when the report was created",
+    )
+    filename: str = Field(..., description="Name of the file analyzed")
+    language: str = Field(..., description="Detected or specified programming language")
+    source_code: str = Field(
+        ..., description="The original source code that was analyzed"
+    )
+    summary: str = Field(
+        ..., description="High-level executive summary of the health of the code"
+    )
+    issues: list[Issue] = Field(
+        ..., description="List of identified issues and slop patterns"
+    )
+    documentation: str = Field(
+        ..., description="Generated documentation or architectural notes"
+    )
+    ai_notes: str | None = Field(
+        default=None,
+        description="Additional context or qualitative notes from the AI provider",
+    )
+    mode: str = Field(..., description="Analysis mode: rule-based or ai-assisted")
+    governance: dict[str, Any] = Field(
+        default_factory=dict, description="Governance and policy compliance metadata"
+    )
+    quality_checks: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Detailed records of internal quality validation steps",
+    )
+    monitoring: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Performance and runtime monitoring telemetry for the analysis",
+    )
 
 
 class ReportSummary(BaseModel):
-    report_id: str
-    created_at: str
-    filename: str
-    language: str
-    summary: str
-    mode: str
-    issue_count: int
-    critical_count: int
+    report_id: str = Field(
+        ..., description="Unique ID of the associated analysis report"
+    )
+    created_at: str = Field(..., description="ISO timestamp of report creation")
+    filename: str = Field(
+        ..., description="Name of the file associated with this report"
+    )
+    language: str = Field(..., description="Programming language of the source file")
+    summary: str = Field(
+        ..., description="Brief one-line summary of the analysis results"
+    )
+    mode: str = Field(..., description="Method used for analysis (rule vs ai)")
+    issue_count: int = Field(..., description="Total number of issues identified")
+    critical_count: int = Field(
+        ..., description="Total number of critical severity issues"
+    )
 
 
 class GitWebhookEvent(BaseModel):
-    repository: str
-    event_type: str
-    branch: str | None = None
-    commit_sha: str | None = None
-    payload_preview: str | None = None
+    repository: str = Field(
+        ..., description="Name of the repository where the event occurred"
+    )
+    event_type: str = Field(
+        ..., description="Type of git event (e.g., push, pull_request)"
+    )
+    branch: str | None = Field(
+        default=None, description="The git branch associated with the event"
+    )
+    commit_sha: str | None = Field(
+        default=None,
+        description="The commit identifier (SHA) associated with the event",
+    )
+    payload_preview: str | None = Field(
+        default=None, description="A truncated preview of the raw event payload"
+    )
 
 
 class CIEvent(BaseModel):
-    pipeline: str
-    status: str
-    branch: str
-    commit_sha: str
+    pipeline: str = Field(..., description="Name of the CI/CD pipeline")
+    status: str = Field(
+        ..., description="Outcome status of the pipeline (e.g., success, failure)"
+    )
+    branch: str = Field(..., description="Branch name on which the pipeline ran")
+    commit_sha: str = Field(..., description="Commit SHA that triggered the pipeline")
 
 
 class IntegrationEvent(BaseModel):
-    event_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    created_at: str = Field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    event_id: str = Field(
+        default_factory=lambda: str(uuid.uuid4()),
+        description="Unique ID for the integration event",
     )
-    source: str
-    event_type: str
-    status: str
-    details: dict[str, Any]
+    created_at: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        description="ISO timestamp of event ingestion",
+    )
+    source: str = Field(..., description="Source system (e.g., github, jenkins)")
+    event_type: str = Field(..., description="Type of event specific to the source")
+    status: str = Field(..., description="Current processing status")
+    details: dict[str, Any] = Field(
+        ..., description="Structured payload details from the source"
+    )
 
 
 # --- GitHub Integration Models (v2 addition) ---
 
 
 class GitHubSettingsUpdate(BaseModel):
-    token: str | None = None
-    webhook_secret: str | None = None
-    clear_token: bool = False
+    token: str | None = Field(
+        default=None, description="New GitHub Personal Access Token"
+    )
+    webhook_secret: str | None = Field(
+        default=None, description="New secret for webhook HMAC verification"
+    )
+    clear_token: bool = Field(
+        default=False, description="Flag to explicitly clear the stored token"
+    )
 
 
 class GitHubSettingsPublic(BaseModel):
-    token_configured: bool
-    token_masked: str | None = None
-    webhook_secret_configured: bool
+    token_configured: bool = Field(..., description="True if a GitHub token is stored")
+    token_masked: str | None = Field(
+        default=None, description="A masked preview of the token for UI display"
+    )
+    webhook_secret_configured: bool = Field(
+        ..., description="True if a webhook secret is stored"
+    )
 
 
 class GitHubPRWebhookPayload(BaseModel):
     """Shape of a real GitHub pull_request webhook event."""
 
-    action: str
-    pull_request: dict[str, Any]
-    repository: dict[str, Any]
+    action: str = Field(
+        ..., description="GitHub PR event action (e.g., opened, synchronize)"
+    )
+    pull_request: dict[str, Any] = Field(
+        ..., description="Full pull request object data"
+    )
+    repository: dict[str, Any] = Field(..., description="Repository object data")
 
 
 SUPPORTED_REPO_EXTENSIONS = {
@@ -302,57 +477,103 @@ SUPPORTED_REPO_EXTENSIONS = {
 
 
 class GenerateTestsRequest(BaseModel):
-    code: str
-    language: str = "python"
-    framework: str = "pytest"
-    include_edge_cases: bool = True
+    code: str = Field(
+        ..., description="Source code for which unit tests should be generated"
+    )
+    language: str = Field(
+        default="python", description="Programming language of the source code"
+    )
+    framework: str = Field(
+        default="pytest", description="Testing framework to target (e.g., pytest, jest)"
+    )
+    include_edge_cases: bool = Field(
+        default=True,
+        description="Whether to generate tests for edge cases and failure modes",
+    )
 
 
 class GenerateTestsResponse(BaseModel):
-    success: bool
-    error: str = ""
-    test_code: str
-    test_count: int
-    functions_tested: list[str]
-    coverage_notes: str
+    success: bool = Field(
+        ..., description="Indicates if test generation was successful"
+    )
+    error: str = Field(default="", description="Error message if generation failed")
+    test_code: str = Field(..., description="The generated test suite source code")
+    test_count: int = Field(..., description="Number of test cases generated")
+    functions_tested: list[str] = Field(
+        ..., description="List of function names covered by the tests"
+    )
+    coverage_notes: str = Field(
+        ..., description="Qualitative notes on test coverage and logic"
+    )
 
 
 class GenerateDocstringsRequest(BaseModel):
-    code: str
-    language: str = "python"
-    style: str = "google"
-    sanitizer: bool | None = True
+    code: str = Field(
+        ..., description="Code snippet for which docstrings should be generated"
+    )
+    language: str = Field(
+        default="python", description="Programming language of the code"
+    )
+    style: str = Field(
+        default="google",
+        description="Docstring style convention (e.g., google, numpy, sphinx)",
+    )
+    sanitizer: bool | None = Field(
+        default=True, description="Whether to sanitize sensitive text in the code"
+    )
 
 
 class GenerateDocstringsResponse(BaseModel):
-    success: bool
-    error: str = ""
-    documented_code: str
-    functions_documented: list[str]
+    success: bool = Field(
+        ..., description="Indicates if docstring generation was successful"
+    )
+    error: str = Field(default="", description="Error message if generation failed")
+    documented_code: str = Field(
+        ..., description="The updated code with generated docstrings included"
+    )
+    functions_documented: list[str] = Field(
+        ..., description="List of function names that were documented"
+    )
 
 
 class GenerateDiagramRequest(BaseModel):
-    code: str
-    language: str = "python"
-    diagram_type: str = "sequence"
-    sanitizer: bool | None = True
+    code: str = Field(..., description="Code snippet to visualize as a diagram")
+    language: str = Field(
+        default="python", description="Programming language of the code"
+    )
+    diagram_type: str = Field(
+        default="sequence",
+        description="Type of diagram to generate (e.g., sequence, class)",
+    )
+    sanitizer: bool | None = Field(
+        default=True, description="Whether to sanitize sensitive text in the code"
+    )
 
 
 class GenerateDiagramResponse(BaseModel):
-    success: bool
-    error: str = ""
-    diagram_syntax: str
-    diagram_type: str
+    success: bool = Field(
+        ..., description="Indicates if diagram generation was successful"
+    )
+    error: str = Field(default="", description="Error message if generation failed")
+    diagram_syntax: str = Field(
+        ..., description="Mermaid.js or equivalent diagram syntax"
+    )
+    diagram_type: str = Field(..., description="The type of diagram generated")
 
 
 class RepositoryFile(BaseModel):
-    path: str
-    content: str
+    path: str = Field(..., description="Relative file path within the repository")
+    content: str = Field(..., description="Text content of the file")
 
 
 class RepositoryAnalyzeRequest(BaseModel):
-    repository_name: str = "uploaded-repository"
-    files: list[RepositoryFile]
+    repository_name: str = Field(
+        default="uploaded-repository",
+        description="Human-readable name for the repository",
+    )
+    files: list[RepositoryFile] = Field(
+        ..., description="List of files to analyze as a batch"
+    )
 
     @model_validator(mode="after")
     def validate_repo_payload(self):
@@ -367,96 +588,166 @@ class RepositoryAnalyzeRequest(BaseModel):
 
 
 class FixProposal(BaseModel):
-    fix_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    file_path: str
-    line_number: int
-    title: str
-    detail: str
-    severity: str
-    score: int
-    original_line: str
-    replacement_line: str
-    approved: bool = False
-    auto_applicable: bool = True
+    fix_id: str = Field(
+        default_factory=lambda: str(uuid.uuid4()),
+        description="Unique identifier for the fix proposal",
+    )
+    file_path: str = Field(
+        ..., description="Path to the file relative to repository root"
+    )
+    line_number: int = Field(
+        ..., description="1-indexed line number where the fix should be applied"
+    )
+    title: str = Field(..., description="Short title describing the nature of the fix")
+    detail: str = Field(
+        ..., description="In-depth explanation of why this fix is recommended"
+    )
+    severity: str = Field(
+        ..., description="Severity of the original problem (e.g., critical, high)"
+    )
+    score: int = Field(..., description="Impact score or priority weight (0-100)")
+    original_line: str = Field(
+        ..., description="The original line of code before the fix"
+    )
+    replacement_line: str = Field(..., description="The proposed replacement code")
+    approved: bool = Field(
+        default=False, description="Whether this fix has been approved by the user"
+    )
+    auto_applicable: bool = Field(
+        default=True,
+        description="Whether the fix can be applied automatically without manual intervention",
+    )
 
 
 class RepositoryAnalysisResult(BaseModel):
-    session_id: str
-    repository_name: str
-    created_at: str
-    file_count: int
-    status: str
-    summary: str
-    fixes: list[FixProposal]
-    applied_fix_count: int = 0
+    session_id: str = Field(
+        ..., description="Unique session ID for the repository analysis"
+    )
+    repository_name: str = Field(..., description="Name of the analyzed repository")
+    created_at: str = Field(..., description="ISO timestamp of analysis completion")
+    file_count: int = Field(
+        ..., description="Number of files processed in this session"
+    )
+    status: str = Field(
+        ..., description="Current session status (e.g., analyzed, applying)"
+    )
+    summary: str = Field(
+        ..., description="Executive summary of the repository-wide analysis"
+    )
+    fixes: list[FixProposal] = Field(
+        ..., description="Comprehensive list of proposed fixes for all files"
+    )
+    applied_fix_count: int = Field(
+        default=0, description="Number of fixes currently applied to the repository"
+    )
 
 
 class ApplyRepositoryFixesRequest(BaseModel):
-    session_id: str
-    approve_all: bool = False
-    approved_fix_ids: list[str] = Field(default_factory=list)
+    session_id: str = Field(
+        ..., description="ID of the repository session to apply fixes for"
+    )
+    approve_all: bool = Field(
+        default=False, description="Flag to approve all proposed fixes in the session"
+    )
+    approved_fix_ids: list[str] = Field(
+        default_factory=list, description="Explicit list of fix IDs to apply"
+    )
 
 
 class ApplyRepositoryFixesResponse(BaseModel):
-    session_id: str
-    status: str
-    applied_fix_count: int
-    updated_file_count: int
-    message: str
+    session_id: str = Field(..., description="ID of the repository session")
+    status: str = Field(..., description="Current status after applying fixes")
+    applied_fix_count: int = Field(
+        ..., description="Total number of fixes successfully applied"
+    )
+    updated_file_count: int = Field(
+        ..., description="Number of files that were modified"
+    )
+    message: str = Field(..., description="Result message or summary of changes")
 
 
 class ActorContext(BaseModel):
-    actor_id: str
-    role: str
+    actor_id: str = Field(
+        ..., description="Identifier of the user or system performing the action"
+    )
+    role: str = Field(..., description="Role of the actor (e.g., admin, reviewer)")
 
 
 class GovernancePolicy(BaseModel):
     id: str = "default"
     version: int = 1
     allowed_providers: list[str] = Field(
-        default_factory=lambda: ["ollama", "openai_compatible", "gemini", "anthropic"]
+        default_factory=lambda: ["ollama", "openai_compatible", "gemini", "anthropic"],
+        description="List of AI providers permitted by policy",
     )
     blocked_patterns: list[str] = Field(
-        default_factory=lambda: ["rm -rf", "drop database", "private_key"]
+        default_factory=lambda: ["rm -rf", "drop database", "private_key"],
+        description="Regexp patterns that trigger policy violations",
     )
-    max_code_length: int = 70000
-    require_reviewer_for_high_risk: bool = True
-    min_transparency_confidence: float = Field(default=0.45, ge=0.0, le=1.0)
+    max_code_length: int = Field(
+        default=70000, description="Maximum length of code snippets allowed in analysis"
+    )
+    require_reviewer_for_high_risk: bool = Field(
+        default=True, description="Enforce dual-review for high-risk changes"
+    )
+    min_transparency_confidence: float = Field(
+        default=0.45,
+        ge=0.0,
+        le=1.0,
+        description="Minimum confidence score for AI detections",
+    )
     updated_at: str = Field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        description="ISO timestamp of policy update",
     )
-    updated_by: str = "system"
+    updated_by: str = Field(
+        default="system",
+        description="Identifier of the actor who last updated the policy",
+    )
 
 
 class GovernancePolicyUpdate(BaseModel):
-    allowed_providers: list[str]
-    blocked_patterns: list[str]
-    max_code_length: int = Field(ge=1000, le=250000)
-    require_reviewer_for_high_risk: bool
-    min_transparency_confidence: float = Field(ge=0.0, le=1.0)
+    allowed_providers: list[str] = Field(..., description="Permitted AI providers")
+    blocked_patterns: list[str] = Field(..., description="Regexp patterns to block")
+    max_code_length: int = Field(ge=1000, le=250000, description="Maximum snippet size")
+    require_reviewer_for_high_risk: bool = Field(..., description="Enforce review flag")
+    min_transparency_confidence: float = Field(
+        ge=0.0, le=1.0, description="Min detection threshold"
+    )
 
 
 class GovernanceAuditEvent(BaseModel):
-    event_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    created_at: str = Field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    event_id: str = Field(
+        default_factory=lambda: str(uuid.uuid4()), description="Unique audit event ID"
     )
-    actor_id: str
-    role: str
-    action: str
-    status: str
-    details: dict[str, Any]
+    created_at: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        description="Timestamp of the audit event",
+    )
+    actor_id: str = Field(..., description="ID of the actor who triggered the event")
+    role: str = Field(..., description="Role of the actor at time of event")
+    action: str = Field(..., description="Nature of the action performed")
+    status: str = Field(..., description="Result status of the action")
+    details: dict[str, Any] = Field(..., description="Structured audit context")
 
 
 class SecurityEvent(BaseModel):
-    event_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    created_at: str = Field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    event_id: str = Field(
+        default_factory=lambda: str(uuid.uuid4()),
+        description="Unique security event ID",
     )
-    severity: str
-    event_type: str
-    actor_id: str
-    details: dict[str, Any]
+    created_at: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        description="Detection timestamp",
+    )
+    severity: str = Field(..., description="Security severity level")
+    event_type: str = Field(..., description="Logical type of security event")
+    actor_id: str = Field(
+        ..., description="ID of the actor who triggered the alert (if applicable)"
+    )
+    details: dict[str, Any] = Field(
+        ..., description="Detailed technical payload for investigation"
+    )
 
 
 ALLOWED_ROLES = {"admin", "reviewer"}
@@ -647,83 +938,121 @@ def rule_based_slop_detection(
     lines = code.splitlines()
 
     for idx, line in enumerate(lines, start=1):
-        if len(line) > 120:
+        _check_line_length(issues, idx, line, thresholds)
+        _check_secrets(issues, idx, line, thresholds)
+        _check_dynamic_execution(issues, idx, line, thresholds)
+        _check_variable_naming(issues, idx, line, thresholds)
+        _check_magic_numbers(issues, idx, line, thresholds)
+
+    _check_duplicate_lines(issues, lines, thresholds)
+    _check_nesting_depth(issues, lines, thresholds)
+    _check_function_count(issues, lines, language, thresholds)
+    _check_incomplete_markers(issues, lines, thresholds)
+    _check_unused_imports(issues, lines, language, thresholds)
+
+    return issues
+
+
+def _check_line_length(
+    issues: list[Issue], idx: int, line: str, thresholds: SeverityThresholds
+):
+    if len(line) > 120:
+        issues.append(
+            build_issue(
+                thresholds,
+                "complexity",
+                "Overly long line",
+                f"Line {idx} is {len(line)} characters and is hard to review.",
+                55,
+                "Wrap the statement into smaller expressions and use helper variables.",
+                idx,
+                line.strip(),
+            )
+        )
+
+
+def _check_secrets(
+    issues: list[Issue], idx: int, line: str, thresholds: SeverityThresholds
+):
+    if re.search(
+        r"(password|secret|token|api_key)\s*=\s*['\"][^'\"]+['\"]",
+        line,
+        re.IGNORECASE,
+    ):
+        issues.append(
+            build_issue(
+                thresholds,
+                "security",
+                "Hardcoded secret-like value",
+                f"Potential credential detected on line {idx}.",
+                92,
+                SUGGESTION_MASK_DATA,
+                idx,
+                line.strip(),
+            )
+        )
+
+
+def _check_dynamic_execution(
+    issues: list[Issue], idx: int, line: str, thresholds: SeverityThresholds
+):
+    if re.search(r"\b(eval|exec)\s*\(", line):
+        issues.append(
+            build_issue(
+                thresholds,
+                "security",
+                "Dynamic execution risk",
+                f"Dynamic execution detected on line {idx}.",
+                88,
+                "Replace eval/exec with explicit parsing or allowlisted operations.",
+                idx,
+                line.strip(),
+            )
+        )
+
+
+def _check_variable_naming(
+    issues: list[Issue], idx: int, line: str, thresholds: SeverityThresholds
+):
+    var_match = re.search(r"\b([a-zA-Z_]\w*)\s*=", line)
+    if var_match:
+        var_name = var_match.group(1)
+        if len(var_name) <= 2 and var_name not in {"i", "j", "k", "x", "y"}:
             issues.append(
                 build_issue(
                     thresholds,
-                    "complexity",
-                    "Overly long line",
-                    f"Line {idx} is {len(line)} characters and is hard to review.",
-                    55,
-                    "Wrap the statement into smaller expressions and use helper variables.",
+                    "readability",
+                    "Poor variable naming",
+                    f"Variable '{var_name}' on line {idx} is not descriptive.",
+                    52,
+                    "Use a descriptive name that communicates business intent.",
                     idx,
                     line.strip(),
                 )
             )
 
-        if re.search(
-            r"(password|secret|token|api_key)\s*=\s*['\"][^'\"]+['\"]",
-            line,
-            re.IGNORECASE,
-        ):
-            issues.append(
-                build_issue(
-                    thresholds,
-                    "security",
-                    "Hardcoded secret-like value",
-                    f"Potential credential detected on line {idx}.",
-                    92,
-                    "Move secrets to environment variables and read them at runtime.",
-                    idx,
-                    line.strip(),
-                )
+
+def _check_magic_numbers(
+    issues: list[Issue], idx: int, line: str, thresholds: SeverityThresholds
+):
+    if re.search(r"=\s*\d{3,}", line) and "const" not in line.lower():
+        issues.append(
+            build_issue(
+                thresholds,
+                "slop",
+                "Hardcoded numeric value",
+                f"Magic number detected on line {idx}.",
+                46,
+                "Extract this value into a named constant or configuration setting.",
+                idx,
+                line.strip(),
             )
+        )
 
-        if re.search(r"\b(eval|exec)\s*\(", line):
-            issues.append(
-                build_issue(
-                    thresholds,
-                    "security",
-                    "Dynamic execution risk",
-                    f"Dynamic execution detected on line {idx}.",
-                    88,
-                    "Replace eval/exec with explicit parsing or allowlisted operations.",
-                    idx,
-                    line.strip(),
-                )
-            )
 
-        var_match = re.search(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\s*=", line)
-        if var_match:
-            var_name = var_match.group(1)
-            if len(var_name) <= 2 and var_name not in {"i", "j", "k", "x", "y"}:
-                issues.append(
-                    build_issue(
-                        thresholds,
-                        "readability",
-                        "Poor variable naming",
-                        f"Variable '{var_name}' on line {idx} is not descriptive.",
-                        52,
-                        "Use a descriptive name that communicates business intent.",
-                        idx,
-                        line.strip(),
-                    )
-                )
-
-        if re.search(r"=\s*\d{3,}", line) and "const" not in line.lower():
-            issues.append(
-                build_issue(
-                    thresholds,
-                    "slop",
-                    "Hardcoded numeric value",
-                    f"Magic number detected on line {idx}.",
-                    46,
-                    "Extract this value into a named constant or configuration setting.",
-                    idx,
-                    line.strip(),
-                )
-            )
-
+def _check_duplicate_lines(
+    issues: list[Issue], lines: list[str], thresholds: SeverityThresholds
+):
     clean_lines = [
         line.strip() for line in lines if line.strip() and len(line.strip()) > 8
     ]
@@ -744,6 +1073,10 @@ def rule_based_slop_detection(
             )
         )
 
+
+def _check_nesting_depth(
+    issues: list[Issue], lines: list[str], thresholds: SeverityThresholds
+):
     max_indent = max(
         (len(line) - len(line.lstrip(" ")) for line in lines if line.strip()), default=0
     )
@@ -759,6 +1092,10 @@ def rule_based_slop_detection(
             )
         )
 
+
+def _check_function_count(
+    issues: list[Issue], lines: list[str], language: str, thresholds: SeverityThresholds
+):
     function_pattern = (
         r"^\s*def\s+\w+\s*\("
         if language.lower() == "python"
@@ -781,7 +1118,11 @@ def rule_based_slop_detection(
             )
         )
 
-    comment_pattern = r'#.*\b(TODO|FIXME|HACK|XXX|BUG|NOTE)\b'
+
+def _check_incomplete_markers(
+    issues: list[Issue], lines: list[str], thresholds: SeverityThresholds
+):
+    comment_pattern = r"#.*\b(TODO|FIXME|HACK|XXX|BUG|NOTE)\b"
     for idx, line in enumerate(lines, start=1):
         if re.search(comment_pattern, line, re.IGNORECASE):
             issues.append(
@@ -797,10 +1138,14 @@ def rule_based_slop_detection(
                 )
             )
 
+
+def _check_unused_imports(
+    issues: list[Issue], lines: list[str], language: str, thresholds: SeverityThresholds
+):
     import_patterns = {
-        "python": r'^\s*(?:import|from\s+\w+\s+import)\s+([a-zA-Z_][a-zA-Z0-9_]*)',
+        "python": r"^\s*(?:import|from\s+\w+\s+import)\s+([a-zA-Z_]\w*)",
         "javascript": r'^\s*(?:import|require)\s+[\'"]([a-zA-Z_][a-zA-Z0-9_-]*)',
-        "java": r'^\s*import\s+([a-zA-Z_][a-zA-Z0-9_.]*)',
+        "java": r"^\s*import\s+([a-zA-Z_][a-zA-Z0-9_.]*)",
         "go": r'^\s*import\s+"([a-zA-Z_][a-zA-Z0-9_/]*)"',
     }
     lang_key = language.lower() if language.lower() in import_patterns else "javascript"
@@ -812,13 +1157,32 @@ def rule_based_slop_detection(
     for line in lines:
         imp_match = re.search(import_re, line)
         if imp_match:
-            imported_modules.add(imp_match.group(1).split('.')[0].split('/')[0])
+            imported_modules.add(imp_match.group(1).split(".")[0].split("/")[0])
 
-        func_match = re.search(r'^\s*(?:def|function|const|class|class\s+\w+)[:{\s]+([a-zA-Z_][a-zA-Z0-9_]*)', line)
+        func_match = re.search(
+            r"^\s*(?:def|function|const|class|class\s+\w+)[:{\s]+([a-zA-Z_]\w*)", line
+        )
         if func_match:
             defined_names.add(func_match.group(1))
 
-    unused_imports = imported_modules - defined_names - {"os", "sys", "json", "re", "math", "logging", "typing", "List", "Dict", "Optional", "Any", "Union"}
+    unused_imports = (
+        imported_modules
+        - defined_names
+        - {
+            "os",
+            "sys",
+            "json",
+            "re",
+            "math",
+            "logging",
+            "typing",
+            "List",
+            "Dict",
+            "Optional",
+            "Any",
+            "Union",
+        }
+    )
     for unused in list(unused_imports)[:3]:
         issues.append(
             build_issue(
@@ -833,7 +1197,9 @@ def rule_based_slop_detection(
         )
 
     for idx, line in enumerate(lines, start=1):
-        if re.search(r'try:\s*(?:#[^\n]*)?\s*except\s*:', line) or re.search(r'try\s*{\s*}', line):
+        if re.search(r"try:\s*(?:#[^\n]*)?\s*except\s*:", line) or re.search(
+            r"try\s*{\s*}", line
+        ):
             issues.append(
                 build_issue(
                     thresholds,
@@ -847,7 +1213,7 @@ def rule_based_slop_detection(
                 )
             )
 
-        if re.search(r'except\s*:', line) and 'except' in line:
+        if re.search(r"except\s*:", line) and "except" in line:
             issues.append(
                 build_issue(
                     thresholds,
@@ -857,7 +1223,7 @@ def rule_based_slop_detection(
                     72,
                     "Catch specific exceptions instead.",
                     idx,
-            line.strip()[:80],
+                    line.strip()[:80],
                 )
             )
 
@@ -867,17 +1233,21 @@ def rule_based_slop_detection(
         func_start = 0
 
         for idx, line in enumerate(lines, start=1):
-            def_match = re.search(r'^\s*def\s+([a-zA-Z_][a-zA-Z0-9_]*)\(', line)
+            def_match = re.search(r"^\s*def\s+([a-zA-Z_]\w*)\(", line)
             if def_match:
                 in_func = True
                 func_name = def_match.group(1)
                 func_start = idx
                 continue
 
-            if in_func and line.strip() and not line.strip().startswith('#'):
-                if line[0] not in ' \t' or (idx - func_start > 3 and not line.strip()):
+            if in_func and line.strip() and not line.strip().startswith("#"):
+                if line[0] not in " \t" or (idx - func_start > 3 and not line.strip()):
                     if idx - func_start > 3:
-                        if not any(re.match(r'^\s+(""".*?""\'|\'\'\'.*?\'\'\')', l_item) for l_item in lines[func_start:idx] if l_item.strip()):
+                        if not any(
+                            re.match(r'^\s+(""".*?""\'|\'\'\'.*?\'\'\')', l_item)
+                            for l_item in lines[func_start:idx]
+                            if l_item.strip()
+                        ):
                             issues.append(
                                 build_issue(
                                     thresholds,
@@ -895,11 +1265,11 @@ def rule_based_slop_detection(
     tab_lines = []
     space_indent = None
     for idx, line in enumerate(lines, start=1):
-        if line.startswith('\t') and space_indent is False:
+        if line.startswith("\t") and space_indent is False:
             tab_lines.append(idx)
-        elif line.startswith(' ') and not line.startswith('\t'):
+        elif line.startswith(" ") and not line.startswith("\t"):
             space_indent = True
-        elif line.startswith('\t'):
+        elif line.startswith("\t"):
             space_indent = False
 
     if tab_lines:
@@ -929,276 +1299,688 @@ def rule_based_slop_detection(
     return issues[:25]
 
 
-def _detect_python_issues(lines: list[str], thresholds: SeverityThresholds) -> list[Issue]:
+def _detect_python_issues(
+    lines: list[str], thresholds: SeverityThresholds
+) -> list[Issue]:
     issues: list[Issue] = []
     for idx, line in enumerate(lines, start=1):
         line_lower = line.lower()
-
-        if re.search(r'["\']\s*%\s*.*(?:select|insert|update|delete|drop|create)', line_lower, re.IGNORECASE):
-            if '%' in line and ('sql' in line_lower or 'query' in line_lower):
-                issues.append(build_issue(
-                    thresholds, "security", "SQL Injection Risk",
-                    f"Potential SQL injection on line {idx} - string formatting in SQL query.",
-                    95, "Use parameterized queries or ORM.", idx, line.strip(), confidence=0.92
-                ))
-
-        if re.search(r'os\.system\(|subprocess\.call\(|subprocess\.run\(.*shell\s*=\s*True', line):
-            issues.append(build_issue(
-                thresholds, "security", "Command Injection Risk",
-                f"Command injection risk on line {idx}.", 90,
-                "Avoid shell=True or sanitize input.", idx, line.strip(), confidence=0.89
-            ))
-
-        if re.search(r'open\([^,)]+\s*\+', line) or re.search(r'open\([^,)]*\%', line):
-            if 'path' in line_lower or 'file' in line_lower or 'dir' in line_lower:
-                issues.append(build_issue(
-                    thresholds, "security", "Path Traversal Risk",
-                    f"Potential path traversal on line {idx}.", 88,
-                    "Validate and sanitize file paths.", idx, line.strip(), confidence=0.85
-                ))
-
-        if re.search(r'hashlib\.(md5|sha1)\(', line) and ('password' in line_lower or 'secret' in line_lower):
-            issues.append(build_issue(
-                thresholds, "security", "Weak Cryptography",
-                f"Weak hash algorithm on line {idx}.", 85,
-                "Use bcrypt or argon2 for passwords.", idx, line.strip(), confidence=0.91
-            ))
-
-        if re.search(r'random\.(random|randint)\(', line) and ('token' in line_lower or 'password' in line_lower or 'session' in line_lower):
-            issues.append(build_issue(
-                thresholds, "security", "Insecure Randomness",
-                f"Random module for security-sensitive purpose on line {idx}.", 82,
-                "Use secrets module for cryptographic randomness.", idx, line.strip(), confidence=0.88
-            ))
-
-        if re.search(r'pickle\.loads\(|pickle\.load\(', line):
-            issues.append(build_issue(
-                thresholds, "security", "Insecure Deserialization",
-                f"Pickle deserialization on line {idx} is risky.", 90,
-                "Use JSON for untrusted data.", idx, line.strip(), confidence=0.93
-            ))
-
-        if re.search(r'sleep\([^)]+\)\s*\)', line) and 'time' not in line_lower:
-            issues.append(build_issue(
-                thresholds, "performance", "Blocking Sleep Call",
-                f"Blocking sleep on line {idx}.", 65,
-                "Use async/await or threading.", idx, line.strip(), confidence=0.75
-            ))
-
-        if line.count('=') >= 6 and len(line) > 80:
-            issues.append(build_issue(
-                thresholds, "maintenance", "Complex Line",
-                f"Line {idx} is overly complex with multiple assignments.", 58,
-                "Break into separate statements.", idx, line.strip(), confidence=0.72
-            ))
+        _check_py_sql_injection(issues, idx, line, line_lower, thresholds)
+        _check_py_command_injection(issues, idx, line, thresholds)
+        _check_py_path_traversal(issues, idx, line, line_lower, thresholds)
+        _check_py_weak_crypto(issues, idx, line, line_lower, thresholds)
+        _check_py_insecure_random(issues, idx, line, line_lower, thresholds)
+        _check_py_insecure_deserialization(issues, idx, line, thresholds)
+        _check_py_blocking_sleep(issues, idx, line, line_lower, thresholds)
+        _check_py_line_complexity(issues, idx, line, thresholds)
 
     return issues
 
 
-def _detect_javascript_issues(lines: list[str], thresholds: SeverityThresholds) -> list[Issue]:
+def _check_py_sql_injection(
+    issues: list[Issue],
+    idx: int,
+    line: str,
+    line_lower: str,
+    thresholds: SeverityThresholds,
+):
+    if re.search(
+        r'["\']\s*%\s*.*(?:select|insert|update|delete|drop|create)',
+        line_lower,
+        re.IGNORECASE,
+    ):
+        if "%" in line and ("sql" in line_lower or "query" in line_lower):
+            issues.append(
+                build_issue(
+                    thresholds,
+                    "security",
+                    ISSUE_SQL_INJECTION,
+                    f"Potential SQL injection on line {idx} - string formatting in SQL query.",
+                    95,
+                    "Use parameterized queries or ORM.",
+                    idx,
+                    line.strip(),
+                    confidence=0.92,
+                )
+            )
+
+
+def _check_py_command_injection(
+    issues: list[Issue], idx: int, line: str, thresholds: SeverityThresholds
+):
+    if re.search(
+        r"os\.system\(|subprocess\.call\(|subprocess\.run\(.*shell\s*=\s*True", line
+    ):
+        issues.append(
+            build_issue(
+                thresholds,
+                "security",
+                ISSUE_COMMAND_INJECTION,
+                f"Command injection risk on line {idx}.",
+                90,
+                "Avoid shell=True or sanitize input.",
+                idx,
+                line.strip(),
+                confidence=0.89,
+            )
+        )
+
+
+def _check_py_path_traversal(
+    issues: list[Issue],
+    idx: int,
+    line: str,
+    line_lower: str,
+    thresholds: SeverityThresholds,
+):
+    if re.search(r"open\([^,)]+\s*\+", line) or re.search(r"open\([^,)]*\%", line):
+        if "path" in line_lower or "file" in line_lower or "dir" in line_lower:
+            issues.append(
+                build_issue(
+                    thresholds,
+                    "security",
+                    ISSUE_PATH_TRAVERSAL,
+                    f"Potential path traversal on line {idx}.",
+                    88,
+                    "Validate and sanitize file paths.",
+                    idx,
+                    line.strip(),
+                    confidence=0.85,
+                )
+            )
+
+
+def _check_py_weak_crypto(
+    issues: list[Issue],
+    idx: int,
+    line: str,
+    line_lower: str,
+    thresholds: SeverityThresholds,
+):
+    if re.search(r"hashlib\.(md5|sha1)\(", line) and (
+        "password" in line_lower or "secret" in line_lower
+    ):
+        issues.append(
+            build_issue(
+                thresholds,
+                "security",
+                ISSUE_WEAK_CRYPTO,
+                f"Weak hash algorithm on line {idx}.",
+                85,
+                "Use bcrypt or argon2 for passwords.",
+                idx,
+                line.strip(),
+                confidence=0.91,
+            )
+        )
+
+
+def _check_py_insecure_random(
+    issues: list[Issue],
+    idx: int,
+    line: str,
+    line_lower: str,
+    thresholds: SeverityThresholds,
+):
+    if re.search(r"random\.(random|randint)\(", line) and (
+        "token" in line_lower or "password" in line_lower or "session" in line_lower
+    ):
+        issues.append(
+            build_issue(
+                thresholds,
+                "security",
+                ISSUE_INSECURE_RANDOM,
+                f"Random module for security-sensitive purpose on line {idx}.",
+                82,
+                "Use secrets module for cryptographic randomness.",
+                idx,
+                line.strip(),
+                confidence=0.88,
+            )
+        )
+
+
+def _check_py_insecure_deserialization(
+    issues: list[Issue], idx: int, line: str, thresholds: SeverityThresholds
+):
+    if re.search(r"pickle\.loads\(|pickle\.load\(", line):
+        issues.append(
+            build_issue(
+                thresholds,
+                "security",
+                ISSUE_INSECURE_DESERIAL,
+                f"Pickle deserialization on line {idx} is risky.",
+                90,
+                "Use JSON for untrusted data.",
+                idx,
+                line.strip(),
+                confidence=0.93,
+            )
+        )
+
+
+def _check_py_blocking_sleep(
+    issues: list[Issue],
+    idx: int,
+    line: str,
+    line_lower: str,
+    thresholds: SeverityThresholds,
+):
+    if re.search(r"sleep\([^)]+\)\s*\)", line) and "time" not in line_lower:
+        issues.append(
+            build_issue(
+                thresholds,
+                "performance",
+                "Blocking Sleep Call",
+                f"Blocking sleep on line {idx}.",
+                65,
+                "Use async/await or threading.",
+                idx,
+                line.strip(),
+                confidence=0.75,
+            )
+        )
+
+
+def _check_py_line_complexity(
+    issues: list[Issue], idx: int, line: str, thresholds: SeverityThresholds
+):
+    if line.count("=") >= 6 and len(line) > 80:
+        issues.append(
+            build_issue(
+                thresholds,
+                "maintenance",
+                "Complex Line",
+                f"Line {idx} is overly complex with multiple assignments.",
+                58,
+                "Break into separate statements.",
+                idx,
+                line.strip(),
+                confidence=0.72,
+            )
+        )
+
+
+def _detect_javascript_issues(
+    lines: list[str], thresholds: SeverityThresholds
+) -> list[Issue]:
     issues: list[Issue] = []
     for idx, line in enumerate(lines, start=1):
         line_lower = line.lower()
 
-        if re.search(r'innerhtml\s*=|dangerouslysetinnerhtml', line, re.IGNORECASE):
-            issues.append(build_issue(
-                thresholds, "security", "XSS Vulnerability",
-                f"Potential XSS on line {idx} - direct HTML insertion.", 93,
-                "Sanitize input or use textContent.", idx, line.strip(), confidence=0.94
-            ))
+        if re.search(r"innerhtml\s*=|dangerouslysetinnerhtml", line, re.IGNORECASE):
+            issues.append(
+                build_issue(
+                    thresholds,
+                    "security",
+                    "XSS Vulnerability",
+                    f"Potential XSS on line {idx} - direct HTML insertion.",
+                    93,
+                    "Sanitize input or use textContent.",
+                    idx,
+                    line.strip(),
+                    confidence=0.94,
+                )
+            )
 
-        if re.search(r'eval\s*\(|new\s+function\s*\(', line):
-            issues.append(build_issue(
-                thresholds, "security", "Code Injection Risk",
-                f"Dynamic code execution on line {idx}.", 91,
-                "Avoid eval, use safer alternatives.", idx, line.strip(), confidence=0.92
-            ))
+        if re.search(r"eval\s*\(|new\s+function\s*\(", line):
+            issues.append(
+                build_issue(
+                    thresholds,
+                    "security",
+                    "Code Injection Risk",
+                    f"Dynamic code execution on line {idx}.",
+                    91,
+                    "Avoid eval, use safer alternatives.",
+                    idx,
+                    line.strip(),
+                    confidence=0.92,
+                )
+            )
 
-        if re.search(r'`.*\$\{.*\}.*`', line) and ('sql' in line_lower or 'query' in line_lower):
-            issues.append(build_issue(
-                thresholds, "security", "SQL Injection Risk",
-                f"Template literal SQL on line {idx}.", 94,
-                "Use parameterized queries.", idx, line.strip(), confidence=0.90
-            ))
+        if re.search(r"`.*\$\{.*\}.*`", line) and (
+            "sql" in line_lower or "query" in line_lower
+        ):
+            issues.append(
+                build_issue(
+                    thresholds,
+                    "security",
+                    ISSUE_SQL_INJECTION,
+                    f"Template literal SQL on line {idx}.",
+                    94,
+                    "Use parameterized queries.",
+                    idx,
+                    line.strip(),
+                    confidence=0.90,
+                )
+            )
 
-        if re.search(r'child_process\.(exec|spawn)\(.*\+', line):
-            issues.append(build_issue(
-                thresholds, "security", "Command Injection",
-                f"Command injection risk on line {idx}.", 92,
-                "Sanitize or use safe spawn.", idx, line.strip(), confidence=0.91
-            ))
+        if re.search(r"child_process\.(exec|spawn)\(.*\+", line):
+            issues.append(
+                build_issue(
+                    thresholds,
+                    "security",
+                    ISSUE_COMMAND_INJECTION,
+                    f"Command injection risk on line {idx}.",
+                    92,
+                    "Sanitize or use safe spawn.",
+                    idx,
+                    line.strip(),
+                    confidence=0.91,
+                )
+            )
 
         if re.search(r'crypto\.createhash\([\'"](md5|sha1)[\'"]\)', line):
-            issues.append(build_issue(
-                thresholds, "security", "Weak Cryptography",
-                f"Weak hash on line {idx}.", 84,
-                "Use SHA-256 or stronger.", idx, line.strip(), confidence=0.89
-            ))
+            issues.append(
+                build_issue(
+                    thresholds,
+                    "security",
+                    ISSUE_WEAK_CRYPTO,
+                    f"Weak hash on line {idx}.",
+                    84,
+                    "Use SHA-256 or stronger.",
+                    idx,
+                    line.strip(),
+                    confidence=0.89,
+                )
+            )
 
-        if re.search(r'math\.random\(\)', line) and ('token' in line_lower or 'id' in line_lower or 'session' in line_lower):
-            issues.append(build_issue(
-                thresholds, "security", "Insecure Randomness",
-                f"Math.random for security on line {idx}.", 81,
-                "Use crypto.randomBytes().", idx, line.strip(), confidence=0.87
-            ))
+        if re.search(r"math\.random\(\)", line) and (
+            "token" in line_lower or "id" in line_lower or "session" in line_lower
+        ):
+            issues.append(
+                build_issue(
+                    thresholds,
+                    "security",
+                    "Insecure Randomness",
+                    f"Math.random for security on line {idx}.",
+                    81,
+                    "Use crypto.randomBytes().",
+                    idx,
+                    line.strip(),
+                    confidence=0.87,
+                )
+            )
 
-        if re.search(r'===.*==|==.*===', line):
-            issues.append(build_issue(
-                thresholds, "best_practices", "Type Coercion Risk",
-                f"Mixed equality operators on line {idx}.", 55,
-                "Use === exclusively.", idx, line.strip(), confidence=0.78
-            ))
+        if re.search(r"===.*==|==.*===", line):
+            issues.append(
+                build_issue(
+                    thresholds,
+                    "best_practices",
+                    "Type Coercion Risk",
+                    f"Mixed equality operators on line {idx}.",
+                    55,
+                    "Use === exclusively.",
+                    idx,
+                    line.strip(),
+                    confidence=0.78,
+                )
+            )
 
-        if re.search(r'console\.(log|warn|error)\(.*password|secret|token|api_key', line, re.IGNORECASE):
-            issues.append(build_issue(
-                thresholds, "security", "Sensitive Data in Logs",
-                f"Potential secret logged on line {idx}.", 88,
-                "Remove or mask sensitive data.", idx, line.strip(), confidence=0.95
-            ))
+        if re.search(
+            r"console\.(log|warn|error)\(.*password|secret|token|api_key",
+            line,
+            re.IGNORECASE,
+        ):
+            issues.append(
+                build_issue(
+                    thresholds,
+                    "security",
+                    "Sensitive Data in Logs",
+                    f"Potential secret logged on line {idx}.",
+                    88,
+                    "Remove or mask sensitive data.",
+                    idx,
+                    line.strip(),
+                    confidence=0.95,
+                )
+            )
 
-        if re.search(r'process\.env\[.*\+', line):
-            issues.append(build_issue(
-                thresholds, "security", "Environment Variable Concatenation",
-                f"Env var concatenation on line {idx}.", 72,
-                "Use full env var names.", idx, line.strip(), confidence=0.76
-            ))
+        if re.search(r"process\.env\[.*\+", line):
+            issues.append(
+                build_issue(
+                    thresholds,
+                    "security",
+                    "Environment Variable Concatenation",
+                    f"Env var concatenation on line {idx}.",
+                    72,
+                    "Use full env var names.",
+                    idx,
+                    line.strip(),
+                    confidence=0.76,
+                )
+            )
 
-        if line.count('.then(') >= 3:
-            issues.append(build_issue(
-                thresholds, "maintenance", "Callback Hell",
-                f"Nested promises on line {idx}.", 62,
-                "Use async/await.", idx, line.strip(), confidence=0.80
-            ))
+        if line.count(".then(") >= 3:
+            issues.append(
+                build_issue(
+                    thresholds,
+                    "maintenance",
+                    "Callback Hell",
+                    f"Nested promises on line {idx}.",
+                    62,
+                    "Use async/await.",
+                    idx,
+                    line.strip(),
+                    confidence=0.80,
+                )
+            )
 
     return issues
 
 
-def _detect_java_issues(lines: list[str], thresholds: SeverityThresholds) -> list[Issue]:
+def _detect_java_issues(
+    lines: list[str], thresholds: SeverityThresholds
+) -> list[Issue]:
+    """Analyze Java code for common security and style issues."""
     issues: list[Issue] = []
     for idx, line in enumerate(lines, start=1):
         line_lower = line.lower()
-
-        if re.search(r'statement\.executequery\s*\(\s*["\'].*\+', line) or re.search(r'preparedstatement.*\+\s*["\']', line):
-            issues.append(build_issue(
-                thresholds, "security", "SQL Injection Risk",
-                f"Potential SQL injection on line {idx}.", 94,
-                "Use PreparedStatement.", idx, line.strip(), confidence=0.93
-            ))
-
-        if re.search(r'runtime\.getruntime\(\)\.exec\(', line):
-            issues.append(build_issue(
-                thresholds, "security", "Command Injection",
-                f"Command execution on line {idx}.", 91,
-                "Validate input thoroughly.", idx, line.strip(), confidence=0.90
-            ))
-
-        if re.search(r'serialization\.readobject\(|objectinputstream', line):
-            issues.append(build_issue(
-                thresholds, "security", "Insecure Deserialization",
-                f"Deserialization on line {idx}.", 92,
-                "Validate input or use a safe deserialization strategy.", idx, line.strip(), confidence=0.91
-            ))
-
-        if re.search(r'messagedigest\.getinstance\([\'"](md5|sha1)[\'"]\)', line):
-            issues.append(build_issue(
-                thresholds, "security", "Weak Cryptography",
-                f"Weak hash on line {idx}.", 84,
-                "Use SHA-256 or stronger.", idx, line.strip(), confidence=0.88
-            ))
-
-        if re.search(r'catch\s*\(\s*exception\s+\w+\s*\)', line):
-            issues.append(build_issue(
-                thresholds, "error-handling", "Broad Exception Catch",
-                f"Catching all exceptions on line {idx}.", 68,
-                "Catch specific exceptions.", idx, line.strip(), confidence=0.82
-            ))
-
-        if re.search(r'throws\s+exception', line):
-            issues.append(build_issue(
-                thresholds, "documentation", "Generic Exception Declaration",
-                f"Throws generic Exception on line {idx}.", 45,
-                "Declare specific exceptions.", idx, line.strip(), confidence=0.75
-            ))
-
-        if re.search(r'string\s+\w+\s*=\s*new\s+string\(', line):
-            issues.append(build_issue(
-                thresholds, "performance", "Unnecessary String Creation",
-                f"Unnecessary String on line {idx}.", 55,
-                "Remove unnecessary conversion.", idx, line.strip(), confidence=0.73
-            ))
-
-        if re.search(r'system\.out\.print\(', line) and ('password' in line_lower or 'secret' in line_lower or 'token' in line_lower):
-            issues.append(build_issue(
-                thresholds, "security", "Sensitive Data Logging",
-                f"Potential secret logged on line {idx}.", 87,
-                "Remove or mask sensitive data.", idx, line.strip(), confidence=0.94
-            ))
-
+        _check_java_sql_injection(issues, idx, line, thresholds)
+        _check_java_command_injection(issues, idx, line, thresholds)
+        _check_java_deserialization(issues, idx, line, thresholds)
+        _check_java_weak_crypto(issues, idx, line, thresholds)
+        _check_java_exception_handling(issues, idx, line, thresholds)
+        _check_java_redundancies(issues, idx, line, thresholds)
+        _check_java_sensitive_logging(issues, idx, line, line_lower, thresholds)
     return issues
+
+
+def _check_java_sql_injection(issues, idx, line, thresholds):
+    if re.search(r'statement\.executequery\s*\(\s*["\'].*\+', line) or re.search(
+        r'preparedstatement.*\+\s*["\']', line
+    ):
+        issues.append(
+            build_issue(
+                thresholds,
+                "security",
+                ISSUE_SQL_INJECTION,
+                f"Potential SQL injection on line {idx}.",
+                94,
+                "Use PreparedStatement.",
+                idx,
+                line.strip(),
+                confidence=0.93,
+            )
+        )
+
+
+def _check_java_command_injection(issues, idx, line, thresholds):
+    if re.search(r"runtime\.getruntime\(\)\.exec\(", line):
+        issues.append(
+            build_issue(
+                thresholds,
+                "security",
+                ISSUE_COMMAND_INJECTION,
+                f"Command execution on line {idx}.",
+                91,
+                "Validate input thoroughly.",
+                idx,
+                line.strip(),
+                confidence=0.90,
+            )
+        )
+
+
+def _check_java_deserialization(issues, idx, line, thresholds):
+    if re.search(r"serialization\.readobject\(|objectinputstream", line):
+        issues.append(
+            build_issue(
+                thresholds,
+                "security",
+                ISSUE_INSECURE_DESERIAL,
+                f"Deserialization on line {idx}.",
+                92,
+                "Validate input or use a safe deserialization strategy.",
+                idx,
+                line.strip(),
+                confidence=0.91,
+            )
+        )
+
+
+def _check_java_weak_crypto(issues, idx, line, thresholds):
+    if re.search(r'messagedigest\.getinstance\([\'"](md5|sha1)[\'"]\)', line):
+        issues.append(
+            build_issue(
+                thresholds,
+                "security",
+                ISSUE_WEAK_CRYPTO,
+                f"Weak hash on line {idx}.",
+                84,
+                "Use SHA-256 or stronger.",
+                idx,
+                line.strip(),
+                confidence=0.88,
+            )
+        )
+
+
+def _check_java_exception_handling(issues, idx, line, thresholds):
+    if re.search(r"catch\s*\(\s*exception\s+\w+\s*\)", line):
+        issues.append(
+            build_issue(
+                thresholds,
+                "error-handling",
+                "Broad Exception Catch",
+                f"Catching all exceptions on line {idx}.",
+                68,
+                "Catch specific exceptions.",
+                idx,
+                line.strip(),
+                confidence=0.82,
+            )
+        )
+    if re.search(r"throws\s+exception", line):
+        issues.append(
+            build_issue(
+                thresholds,
+                "documentation",
+                "Generic Exception Declaration",
+                f"Throws generic Exception on line {idx}.",
+                45,
+                "Declare specific exceptions.",
+                idx,
+                line.strip(),
+                confidence=0.75,
+            )
+        )
+
+
+def _check_java_redundancies(issues, idx, line, thresholds):
+    if re.search(r"string\s+\w+\s*=\s*new\s+string\(", line):
+        issues.append(
+            build_issue(
+                thresholds,
+                "performance",
+                "Unnecessary String Creation",
+                f"Unnecessary String on line {idx}.",
+                55,
+                "Remove unnecessary conversion.",
+                idx,
+                line.strip(),
+                confidence=0.73,
+            )
+        )
+
+
+def _check_java_sensitive_logging(issues, idx, line, line_lower, thresholds):
+    if re.search(r"system\.out\.print\(", line) and (
+        "password" in line_lower or "secret" in line_lower or "token" in line_lower
+    ):
+        issues.append(
+            build_issue(
+                thresholds,
+                "security",
+                "Sensitive Data Logging",
+                f"Potential secret logged on line {idx}.",
+                87,
+                SUGGESTION_MASK_DATA,
+                idx,
+                line.strip(),
+                confidence=0.94,
+            )
+        )
 
 
 def _detect_go_issues(lines: list[str], thresholds: SeverityThresholds) -> list[Issue]:
+    """Analyze Go code for common security and style issues."""
     issues: list[Issue] = []
     for idx, line in enumerate(lines, start=1):
         line_lower = line.lower()
-
-        if re.search(r'exec\.command\([^)]*\+', line):
-            issues.append(build_issue(
-                thresholds, "security", "Command Injection",
-                f"Command injection risk on line {idx}.", 91,
-                "Validate or sanitize input.", idx, line.strip(), confidence=0.90
-            ))
-
-        if re.search(r'strconv\.atoi\(|strconv\.parsefloat\(', line) and 'error' not in line:
-            issues.append(build_issue(
-                thresholds, "error-handling", "Ignoring Parse Error",
-                f"Ignoring parse error on line {idx}.", 75,
-                "Handle error return value.", idx, line.strip(), confidence=0.83
-            ))
-
-        if re.search(r'fmt\.printf\(.*password|secret|token', line, re.IGNORECASE):
-            issues.append(build_issue(
-                thresholds, "security", "Sensitive Data Logging",
-                f"Potential secret logged on line {idx}.", 88,
-                "Remove or mask sensitive data.", idx, line.strip(), confidence=0.93
-            ))
-
-        if re.search(r'json\.unmarshal\(.*\[\]byte', line) and 'error' not in line:
-            issues.append(build_issue(
-                thresholds, "error-handling", "Ignoring Unmarshal Error",
-                f"Ignoring JSON decode error on line {idx}.", 72,
-                "Handle error return value.", idx, line.strip(), confidence=0.80
-            ))
-
-        if re.search(r'go\s+func\(\)\s*\{', line) and 'waitgroup' not in line and 'channel' not in line:
-            issues.append(build_issue(
-                thresholds, "performance", "Goroutine Leak Risk",
-                f"Uncontrolled goroutine on line {idx}.", 68,
-                "Ensure goroutine is properly managed.", idx, line.strip(), confidence=0.77
-            ))
-
-        if re.search(r'panic\(', line) and 'test' not in line_lower:
-            issues.append(build_issue(
-                thresholds, "error-handling", "Panic Usage",
-                f"Panic on line {idx} - not for production.", 76,
-                "Return error instead.", idx, line.strip(), confidence=0.85
-            ))
-
-        if re.search(r'make\(map\[', line) and 'len(' not in line:
-            issues.append(build_issue(
-                thresholds, "performance", "Uninitialized Map",
-                f"Map created without size hint on line {idx}.", 48,
-                "Provide size hint if known.", idx, line.strip(), confidence=0.70
-            ))
-
-        if re.search(r'crypto/md5|crypto/sha1', line):
-            issues.append(build_issue(
-                thresholds, "security", "Weak Cryptography",
-                f"Weak hash on line {idx}.", 83,
-                "Use sha256 or stronger.", idx, line.strip(), confidence=0.87
-            ))
-
+        _check_go_command_injection(issues, idx, line, thresholds)
+        _check_go_error_handling(issues, idx, line, thresholds)
+        _check_go_sensitive_logging(issues, idx, line, thresholds)
+        _check_go_json_unmarshal(issues, idx, line, thresholds)
+        _check_go_concurrency(issues, idx, line, line_lower, thresholds)
+        _check_go_panic_usage(issues, idx, line, line_lower, thresholds)
+        _check_go_map_init(issues, idx, line, thresholds)
     return issues
+
+
+def _check_go_command_injection(issues, idx, line, thresholds):
+    if re.search(r"exec\.command\([^)]*\+", line):
+        issues.append(
+            build_issue(
+                thresholds,
+                "security",
+                ISSUE_COMMAND_INJECTION,
+                f"Command injection risk on line {idx}.",
+                91,
+                "Validate or sanitize input.",
+                idx,
+                line.strip(),
+                confidence=0.90,
+            )
+        )
+
+
+def _check_go_error_handling(issues, idx, line, thresholds):
+    if (
+        re.search(r"strconv\.atoi\(|strconv\.parsefloat\(", line)
+        and "error" not in line
+    ):
+        issues.append(
+            build_issue(
+                thresholds,
+                "error-handling",
+                "Ignoring Parse Error",
+                f"Ignoring parse error on line {idx}.",
+                75,
+                "Handle error return value.",
+                idx,
+                line.strip(),
+                confidence=0.83,
+            )
+        )
+
+
+def _check_go_sensitive_logging(issues, idx, line, thresholds):
+    if re.search(r"fmt\.printf\(.*password|secret|token", line, re.IGNORECASE):
+        issues.append(
+            build_issue(
+                thresholds,
+                "security",
+                "Sensitive Data Logging",
+                f"Potential secret logged on line {idx}.",
+                88,
+                SUGGESTION_MASK_DATA,
+                idx,
+                line.strip(),
+                confidence=0.94,
+            )
+        )
+
+
+def _check_go_json_unmarshal(issues, idx, line, thresholds):
+    if re.search(r"json\.unmarshal\(.*\[\]byte", line) and "error" not in line:
+        issues.append(
+            build_issue(
+                thresholds,
+                "error-handling",
+                "Ignoring Unmarshal Error",
+                f"Ignoring JSON decode error on line {idx}.",
+                72,
+                "Handle error return value.",
+                idx,
+                line.strip(),
+                confidence=0.80,
+            )
+        )
+
+
+def _check_go_concurrency(issues, idx, line, line_lower, thresholds):
+    if (
+        re.search(r"go\s+func\(\)\s*\{", line)
+        and "waitgroup" not in line
+        and "channel" not in line
+    ):
+        issues.append(
+            build_issue(
+                thresholds,
+                "performance",
+                "Goroutine Leak Risk",
+                f"Uncontrolled goroutine on line {idx}.",
+                68,
+                "Ensure goroutine is properly managed.",
+                idx,
+                line.strip(),
+                confidence=0.77,
+            )
+        )
+
+
+def _check_go_panic_usage(issues, idx, line, line_lower, thresholds):
+    if re.search(r"panic\(", line) and "test" not in line_lower:
+        issues.append(
+            build_issue(
+                thresholds,
+                "error-handling",
+                "Panic Usage",
+                f"Panic on line {idx} - not for production.",
+                76,
+                "Return error instead.",
+                idx,
+                line.strip(),
+                confidence=0.85,
+            )
+        )
+
+
+
+
+def _check_go_map_init(issues, idx, line, thresholds):
+    if re.search(r"make\(map\[", line) and "len(" not in line:
+        issues.append(
+            build_issue(
+                thresholds,
+                "performance",
+                "Uninitialized Map",
+                f"Map created without size hint on line {idx}.",
+                48,
+                "Provide size hint if known.",
+                idx,
+                line.strip(),
+                confidence=0.70,
+            )
+        )
+
+
+def _check_go_crypto(issues, idx, line, thresholds):
+    if re.search(r"crypto/md5|crypto/sha1", line):
+        issues.append(
+            build_issue(
+                thresholds,
+                "security",
+                ISSUE_WEAK_CRYPTO,
+                f"Weak hash on line {idx}.",
+                83,
+                "Use sha256 or stronger.",
+                idx,
+                line.strip(),
+                confidence=0.87,
+            )
+        )
 
 
 def generate_summary(issues: list[Issue]) -> str:
@@ -1214,15 +1996,13 @@ def generate_documentation(code: str, language: str) -> str:
     function_docs: list[str] = []
     if language.lower() == "python":
         for line in lines:
-            match = re.search(r"^\s*def\s+([a-zA-Z0-9_]+)\((.*?)\):", line)
+            match = re.search(r"^\s*def\s+(\w+)\((.*?)\):", line)
             if match:
                 function_docs.append(f"- `{match.group(1)}`({match.group(2)})")
     else:
         for line in lines:
-            match = re.search(r"^\s*function\s+([a-zA-Z0-9_]+)\((.*?)\)", line)
-            arrow_match = re.search(
-                r"^\s*const\s+([a-zA-Z0-9_]+)\s*=\s*\((.*?)\)\s*=>", line
-            )
+            match = re.search(r"^\s*function\s+(\w+)\((.*?)\)", line)
+            arrow_match = re.search(r"^\s*const\s+(\w+)\s*=\s*\((.*?)\)\s*=>", line)
             if match:
                 function_docs.append(f"- `{match.group(1)}`({match.group(2)})")
             elif arrow_match:
@@ -1270,8 +2050,11 @@ def parse_json_from_text(text: str) -> dict[str, Any] | None:
 
 
 def get_encryption_cipher() -> Fernet:
-    base_secret = f"{mongo_url}:{os.environ.get('DB_NAME', 'drcode')}:slop-code-doctor".encode(
-        "utf-8"
+    # Use standardized MONGO_URL constant for consistency
+    base_secret = (
+        f"{MONGO_URL}:{os.environ.get('DB_NAME', 'drcode')}:slop-code-doctor".encode(
+            "utf-8"
+        )
     )
     digest = hashlib.sha256(base_secret).digest()
     return Fernet(base64.urlsafe_b64encode(digest))
@@ -1316,11 +2099,36 @@ def build_default_settings_doc() -> dict[str, Any]:
         provider: build_default_provider_config(provider) for provider in PROVIDER_KEYS
     }
 
-    # Use auto-discovery for Ollama
-    ollama_base_url, ollama_model = discover_ollama_url()
-    providers["ollama"]["base_url"] = ollama_base_url
-    providers["ollama"]["model"] = ollama_model
-    providers["ollama"]["enabled"] = True
+    # v2: Unified multi-provider bootstrap from environment
+    active_provider = os.environ.get("ACTIVE_PROVIDER", "ollama").lower()
+    ai_model_name = os.environ.get("AI_MODEL_NAME")
+
+    # Enable chosen provider and set model/key if present
+    if active_provider in providers:
+        providers[active_provider]["enabled"] = True
+        if ai_model_name:
+            providers[active_provider]["model"] = ai_model_name
+
+        # Automatically pick up API keys from env if they follow the pattern (e.g. OPENAI_API_KEY)
+        env_key = f"{active_provider.upper()}_API_KEY"
+        if os.environ.get(env_key):
+            val = os.environ[env_key]
+            providers[active_provider]["api_key_encrypted"] = encrypt_value(val)
+            providers[active_provider]["api_key_masked"] = mask_key(val)
+            providers[active_provider]["key_configured"] = True
+
+    # Ollama special handling for backward compatibility and auto-discovery
+    if active_provider == "ollama":
+        ollama_base_url, ollama_model = discover_ollama_url()
+        providers["ollama"]["base_url"] = os.environ.get(
+            "OLLAMA_BASE_URL", ollama_base_url
+        )
+        providers["ollama"]["model"] = os.environ.get("OLLAMA_MODEL", ollama_model)
+        providers["ollama"]["enabled"] = True
+    else:
+        # If not using Ollama as primary, still try to detect if it's there but keep it disabled by default
+        # unless it was specifically chosen.
+        pass
     # v2: GitHub integration block — token stored encrypted, same pattern as AI provider keys
     github_token_env = os.environ.get("GITHUB_TOKEN")
     github_webhook_secret_env = os.environ.get("GITHUB_WEBHOOK_SECRET")
@@ -1470,7 +2278,9 @@ RULES:
 
 
 def build_analysis_prompt(code: str, language: str) -> str:
-    return f"{ANALYSIS_SYSTEM_PROMPT}\n\nLanguage: {language}\n\nCode to analyze:\n{code}"
+    return (
+        f"{ANALYSIS_SYSTEM_PROMPT}\n\nLanguage: {language}\n\nCode to analyze:\n{code}"
+    )
 
 
 def call_provider_ollama(prompt: str, config: dict[str, Any]) -> str | None:
@@ -1574,28 +2384,7 @@ def call_llm_sync(
         if not config.get("enabled"):
             continue
         try:
-            raw_response: str | None = None
-            if provider_name == "ollama":
-                raw_response = call_provider_ollama(prompt, config)
-            elif provider_name == "local" and call_provider_local is not None:
-                # Local provider - uses a local model server
-                local_conf = providers.get("local", {})
-                raw_response = call_provider_local(prompt, local_conf)
-            elif provider_name == "openai_compatible":
-                api_key = decrypt_value(config.get("api_key_encrypted"))
-                if api_key:
-                    raw_response = call_provider_openai_compatible(
-                        prompt, config, api_key
-                    )
-            elif provider_name == "gemini":
-                api_key = decrypt_value(config.get("api_key_encrypted"))
-                if api_key:
-                    raw_response = call_provider_gemini(prompt, config, api_key)
-            elif provider_name == "anthropic":
-                api_key = decrypt_value(config.get("api_key_encrypted"))
-                if api_key:
-                    raw_response = call_provider_anthropic(prompt, config, api_key)
-
+            raw_response = _dispatch_provider_call(provider_name, prompt, config)
             if not raw_response:
                 continue
             parsed = parse_json_from_text(raw_response)
@@ -1605,6 +2394,29 @@ def call_llm_sync(
         except requests.RequestException:
             continue
 
+    return None
+
+
+def _dispatch_provider_call(
+    provider_name: str, prompt: str, config: dict[str, Any]
+) -> str | None:
+    """Internal dispatcher for different AI providers."""
+    if provider_name == "ollama":
+        return call_provider_ollama(prompt, config)
+    if provider_name == "local" and call_provider_local is not None:
+        return call_provider_local(prompt, config)
+
+    # Providers requiring API keys
+    api_key = decrypt_value(config.get("api_key_encrypted"))
+    if not api_key:
+        return None
+
+    if provider_name == "openai_compatible":
+        return call_provider_openai_compatible(prompt, config, api_key)
+    if provider_name == "gemini":
+        return call_provider_gemini(prompt, config, api_key)
+    if provider_name == "anthropic":
+        return call_provider_anthropic(prompt, config, api_key)
     return None
 
 
@@ -1679,7 +2491,7 @@ def generate_repository_fix_proposals(
         for idx, line in enumerate(lines, start=1):
             if extension == ".py":
                 secret_match = re.match(
-                    r"^(\s*)([A-Za-z_][A-Za-z0-9_]*)\s*=\s*['\"][^'\"]+['\"]\s*$", line
+                    r"^(\s*)([A-Za-z_]\w*)\s*=\s*['\"][^'\"]+['\"]\s*$", line
                 )
                 if secret_match:
                     indent, var_name = secret_match.group(1), secret_match.group(2)
@@ -1704,7 +2516,7 @@ def generate_repository_fix_proposals(
                         )
 
                 eval_assign_match = re.match(
-                    r"^(\s*)([A-Za-z_][A-Za-z0-9_]*)\s*=\s*eval\((.+)\)\s*$", line
+                    r"^(\s*)([A-Za-z_]\w*)\s*=\s*eval\((.+)\)\s*$", line
                 )
                 if eval_assign_match:
                     indent, lhs, expression = (
@@ -1878,8 +2690,8 @@ async def get_or_create_settings_doc() -> dict[str, Any]:
 
 
 @api_router.get("/")
-async def root():
-    return {"message": "Slop and Code Doctor API is running"}
+async def api_root():
+    return {"name": "DR.CODE-II API", "version": "2.0.0", "status": "running"}
 
 
 @api_router.get("/health")
@@ -1904,11 +2716,19 @@ async def health():
     }
 
 
-@api_router.post("/analyze", response_model=AnalysisReport)
-async def analyze_code(
+@api_router.post(
+    "/analyze",
+    response_model=AnalysisReport,
+    responses={
+        400: {"description": "Invalid source code or configuration"},
+        401: {"description": "Unauthorized access or missing credentials"},
+        404: {"description": "Specified AI provider or model not found"},
+    },
+)
+async def analyze_endpoint(
     payload: AnalyzeRequest,
-    x_actor_id: str | None = Header(default=None),
-    x_user_role: str | None = Header(default=None),
+    x_actor_id: Annotated[str | None, Header(default=None)] = None,
+    x_user_role: Annotated[str | None, Header(default=None)] = None,
 ):
     started_at = perf_counter()
     actor = resolve_actor_context(x_actor_id, x_user_role)
@@ -1939,122 +2759,168 @@ async def analyze_code(
             details={"provider": selected_provider, "policy_version": policy.version},
         )
 
-    mode = "rule-based"
-    ai_notes = None
-    documentation = generate_documentation(cleaned_code, payload.language)
-
     if ai_payload:
         mode = "hybrid"
-        provider_used = ai_payload.get("provider_used", "llm")
+        _merge_ai_results(issues, ai_payload, thresholds)
 
-        ai_notes = ai_payload.get("summary") or ai_payload.get("ai_notes")
-
-        if ai_payload.get("documentation"):
-            documentation = ai_payload["documentation"]
-
-        for llm_issue in ai_payload.get("issues", []):
-            severity_map = {"critical": 95, "high": 75, "medium": 55, "low": 25}
-            severity = severity_map.get(llm_issue.get("severity", "medium").lower(), 55)
-
-            issues.append(
-                build_issue(
-                    thresholds,
-                    llm_issue.get("category", "maintenance"),
-                    llm_issue.get("title", "AI Detected Issue"),
-                    llm_issue.get("detail", ""),
-                    severity,
-                    llm_issue.get("fix_suggestion", "Review and fix as needed."),
-                    llm_issue.get("line"),
-                    source=provider_used,
-                    confidence=llm_issue.get("confidence", 0.7),
-                    risk_tags=["ai-detected", llm_issue.get("category", "unknown")],
-                    decision_trace=[
-                        f"LLM provider '{provider_used}' detected issue",
-                        f"Category: {llm_issue.get('category')}",
-                        f"Severity: {llm_issue.get('severity')}",
-                    ],
-                )
-            )
-
-        for suggestion in ai_payload.get("extra_suggestions", [])[:4]:
-            issues.append(
-                build_issue(
-                    thresholds,
-                    "ai-suggestion",
-                    "AI Refactor Opportunity",
-                    suggestion,
-                    49,
-                    "Apply the suggestion and rerun analysis to confirm improvement.",
-                    source=provider_used,
-                    confidence=0.61,
-                    risk_tags=["ai-suggestion", "refactor"],
-                    decision_trace=[
-                        f"LLM provider '{provider_used}' returned structured suggestion",
-                        "Suggestion normalized into issue item",
-                        "Severity mapped via configured thresholds",
-                    ],
-                )
-            )
-
-    redacted_issues = [redact_issue(issue) for issue in issues]
-    critical_count = sum(1 for issue in redacted_issues if issue.severity == "critical")
-    requires_reviewer = bool(
-        policy.require_reviewer_for_high_risk and critical_count > 0
-    )
-    governance_payload = {
-        "policy_version": policy.version,
-        "provider_allowed": provider_allowed,
-        "primary_provider": selected_provider,
-        "requires_reviewer_approval": requires_reviewer,
-        "transparency_mode": "detailed",
-    }
-    monitoring_payload = {
-        "analysis_ms": round((perf_counter() - started_at) * 1000, 2),
-        "issue_count": len(redacted_issues),
-        "critical_count": critical_count,
-    }
-
-    report = AnalysisReport(
-        filename=payload.filename or "untitled",
-        language=payload.language,
-        source_code=cleaned_code,
-        summary=generate_summary(redacted_issues),
-        issues=redacted_issues,
-        documentation=documentation,
-        ai_notes=ai_notes,
-        mode=mode,
-        governance=governance_payload,
-        quality_checks=quality_checks,
-        monitoring=monitoring_payload,
+    report = _build_analysis_report(
+        payload,
+        cleaned_code,
+        issues,
+        ai_payload,
+        mode,
+        quality_checks,
+        started_at,
+        policy,
+        selected_provider,
+        provider_allowed,
     )
 
+    await _persist_analysis_report(report, actor, mode, selected_provider, started_at)
+    return report
+
+
+async def _persist_analysis_report(
+    report: AnalysisReport,
+    actor: ActorContext,
+    mode: str,
+    provider: str,
+    started_at: float,
+):
+    """Save report and metrics to database and record governance event."""
     await db.reports.insert_one(report.model_dump())
+
+    analysis_ms = round((perf_counter() - started_at) * 1000, 2)
+    critical_count = sum(1 for issue in report.issues if issue.severity == "critical")
+
     await db.quality_metrics.insert_one(
         {
             "metric_id": str(uuid.uuid4()),
             "created_at": datetime.now(timezone.utc).isoformat(),
             "report_id": report.report_id,
-            "analysis_ms": monitoring_payload["analysis_ms"],
-            "issue_count": monitoring_payload["issue_count"],
-            "critical_count": monitoring_payload["critical_count"],
+            "analysis_ms": analysis_ms,
+            "issue_count": len(report.issues),
+            "critical_count": critical_count,
             "mode": mode,
         }
     )
+
     await record_governance_event(
         actor=actor,
         action="analysis-run",
-        status="success",
+        status=STATUS_SUCCESS,
         details={
             "report_id": report.report_id,
             "mode": mode,
-            "provider": selected_provider,
+            "provider": provider,
             "critical_count": critical_count,
         },
     )
-    return report
 
 
-@api_router.post("/generate/tests", response_model=GenerateTestsResponse)
+def _build_analysis_report(
+    payload: AnalyzeRequest,
+    code: str,
+    issues: list[Issue],
+    ai_payload: dict[str, Any] | None,
+    mode: str,
+    quality_checks: list[dict[str, Any]],
+    started_at: float,
+    policy: GovernancePolicy,
+    provider: str,
+    provider_allowed: bool,
+) -> AnalysisReport:
+    """Consolidate all analysis data into a structured report."""
+    redacted_issues = [redact_issue(issue) for issue in issues]
+    critical_count = sum(1 for issue in redacted_issues if issue.severity == "critical")
+
+    ai_notes = None
+    documentation = generate_documentation(code, payload.language)
+    if ai_payload:
+        ai_notes = ai_payload.get("summary") or ai_payload.get("ai_notes")
+        if ai_payload.get("documentation"):
+            documentation = ai_payload["documentation"]
+
+    return AnalysisReport(
+        filename=payload.filename or "untitled",
+        language=payload.language,
+        source_code=code,
+        summary=generate_summary(redacted_issues),
+        issues=redacted_issues,
+        documentation=documentation,
+        ai_notes=ai_notes,
+        mode=mode,
+        governance={
+            "policy_version": policy.version,
+            "provider_allowed": provider_allowed,
+            "primary_provider": provider,
+            "requires_reviewer_approval": bool(
+                policy.require_reviewer_for_high_risk and critical_count > 0
+            ),
+            "transparency_mode": "detailed",
+        },
+        quality_checks=quality_checks,
+        monitoring={
+            "analysis_ms": round((perf_counter() - started_at) * 1000, 2),
+            "issue_count": len(redacted_issues),
+            "critical_count": critical_count,
+        },
+    )
+
+
+def _merge_ai_results(
+    issues: list[Issue], ai_payload: dict[str, Any], thresholds: SeverityThresholds
+):
+    """Normalize and inject AI-detected issues and suggestions into the results list."""
+    provider_used = ai_payload.get("provider_used", "llm")
+    severity_map = {"critical": 95, "high": 75, "medium": 55, "low": 25}
+
+    for llm_issue in ai_payload.get("issues", []):
+        severity_score = severity_map.get(
+            llm_issue.get("severity", "medium").lower(), 55
+        )
+        issues.append(
+            build_issue(
+                thresholds,
+                llm_issue.get("category", "maintenance"),
+                llm_issue.get("title", "AI Detected Issue"),
+                llm_issue.get("detail", ""),
+                severity_score,
+                llm_issue.get("fix_suggestion", "Review and fix as needed."),
+                llm_issue.get("line"),
+                source=provider_used,
+                confidence=llm_issue.get("confidence", 0.7),
+                risk_tags=["ai-detected", llm_issue.get("category", "unknown")],
+                decision_trace=[
+                    f"LLM provider '{provider_used}' detected issue",
+                    f"Category: {llm_issue.get('category')}",
+                    f"Severity: {llm_issue.get('severity')}",
+                ],
+            )
+        )
+
+    for suggestion in ai_payload.get("extra_suggestions", [])[:4]:
+        issues.append(
+            build_issue(
+                thresholds,
+                "ai-suggestion",
+                "AI Refactor Opportunity",
+                suggestion,
+                49,
+                "Apply the suggestion and rerun analysis to confirm improvement.",
+                source=provider_used,
+                confidence=0.61,
+                risk_tags=["ai-suggestion", "refactor"],
+                decision_trace=[f"LLM provider '{provider_used}' returned suggestion"],
+            )
+        )
+
+
+@api_router.post(
+    "/generate/tests",
+    response_model=GenerateTestsResponse,
+    responses={400: {"description": "Invalid code or test framework specified"}},
+)
 async def generate_tests_endpoint(payload: GenerateTestsRequest):
 
     sanitizer_flag = getattr(payload, "sanitizer", True)
@@ -2068,7 +2934,11 @@ async def generate_tests_endpoint(payload: GenerateTestsRequest):
     return GenerateTestsResponse(**result)
 
 
-@api_router.post("/generate/docstrings", response_model=GenerateDocstringsResponse)
+@api_router.post(
+    "/generate/docstrings",
+    response_model=GenerateDocstringsResponse,
+    responses={400: {"description": "Invalid code or docstring style specified"}},
+)
 async def generate_docstrings_endpoint(payload: GenerateDocstringsRequest):
 
     sanitizer_flag = getattr(payload, "sanitizer", True)
@@ -2081,7 +2951,11 @@ async def generate_docstrings_endpoint(payload: GenerateDocstringsRequest):
     return GenerateDocstringsResponse(**result)
 
 
-@api_router.post("/generate/diagram", response_model=GenerateDiagramResponse)
+@api_router.post(
+    "/generate/diagram",
+    response_model=GenerateDiagramResponse,
+    responses={400: {"description": "Invalid code or diagram type specified"}},
+)
 async def generate_diagram_endpoint(payload: GenerateDiagramRequest):
 
     sanitizer_flag = getattr(payload, "sanitizer", True)
@@ -2123,7 +2997,11 @@ async def list_reports():
     return summaries
 
 
-@api_router.get("/reports/{report_id}", response_model=AnalysisReport)
+@api_router.get(
+    "/reports/{report_id}",
+    response_model=AnalysisReport,
+    responses={404: {"description": "Analysis report not found"}},
+)
 async def get_report(report_id: str):
     doc = await db.reports.find_one({"report_id": report_id}, {"_id": 0})
     if not doc:
@@ -2131,8 +3009,15 @@ async def get_report(report_id: str):
     return AnalysisReport(**doc)
 
 
-@api_router.post("/repository/analyze", response_model=RepositoryAnalysisResult)
+@api_router.post(
+    "/repository/analyze",
+    response_model=RepositoryAnalysisResult,
+    responses={
+        400: {"description": "No supported files found or payload size exceeded"}
+    },
+)
 async def analyze_repository(payload: RepositoryAnalyzeRequest):
+    """Scan a repository payload, generate fix proposals, and persist as a session."""
     settings_doc = await get_or_create_settings_doc()
     thresholds = SeverityThresholds(**settings_doc["severity"])
     supported_files = [
@@ -2147,36 +3032,47 @@ async def analyze_repository(payload: RepositoryAnalyzeRequest):
         )
 
     proposals = generate_repository_fix_proposals(supported_files, thresholds)
+    return await _build_analysis_session(
+        payload.repository_name, supported_files, proposals
+    )
+
+
+async def _build_analysis_session(
+    repo_name: str, files: list[RepositoryFile], proposals: list[FixProposal]
+) -> RepositoryAnalysisResult:
+    """Internal helper to persist analysis results and return the session metadata."""
     created_at = datetime.now(timezone.utc).isoformat()
     session_id = str(uuid.uuid4())
 
     session_doc = {
         "session_id": session_id,
-        "repository_name": payload.repository_name,
+        "repository_name": repo_name,
         "created_at": created_at,
-        "status": "analyzed",
-        "summary": build_repository_summary(proposals, len(supported_files)),
-        "file_count": len(supported_files),
-        "files": [file.model_dump() for file in supported_files],
-        "fixes": [proposal.model_dump() for proposal in proposals],
+        "status": MSG_REPO_ANALYZED,
+        "summary": build_repository_summary(proposals, len(files)),
+        "file_count": len(files),
+        "files": [f.model_dump() for f in files],
+        "fixes": [p.model_dump() for p in proposals],
         "applied_fix_count": 0,
     }
     await db.repository_sessions.insert_one(session_doc)
 
     return RepositoryAnalysisResult(
         session_id=session_id,
-        repository_name=payload.repository_name,
+        repository_name=repo_name,
         created_at=created_at,
-        file_count=len(supported_files),
-        status="analyzed",
-        summary=session_doc["summary"],
+        file_count=len(files),
+        status=MSG_REPO_ANALYZED,
+        summary=str(session_doc["summary"]),
         fixes=proposals,
         applied_fix_count=0,
     )
 
 
 @api_router.get(
-    "/repository/sessions/{session_id}", response_model=RepositoryAnalysisResult
+    "/repository/sessions/{session_id}",
+    response_model=RepositoryAnalysisResult,
+    responses={404: {"description": ERROR_SESSION_NOT_FOUND}},
 )
 async def get_repository_session(session_id: str):
     session = await db.repository_sessions.find_one(
@@ -2197,7 +3093,14 @@ async def get_repository_session(session_id: str):
     )
 
 
-@api_router.post("/repository/apply-fixes", response_model=ApplyRepositoryFixesResponse)
+@api_router.post(
+    "/repository/apply-fixes",
+    response_model=ApplyRepositoryFixesResponse,
+    responses={
+        400: {"description": "Invalid fix selection or non-auto-applicable fixes"},
+        404: {"description": ERROR_SESSION_NOT_FOUND},
+    },
+)
 async def apply_repository_fixes(payload: ApplyRepositoryFixesRequest):
     session = await db.repository_sessions.find_one(
         {"session_id": payload.session_id}, {"_id": 0}
@@ -2229,34 +3132,7 @@ async def apply_repository_fixes(payload: ApplyRepositoryFixesRequest):
             status_code=400, detail="No auto-applicable fixes were selected"
         )
 
-    applied_ids: list[str] = []
-    changed_paths: list[str] = []
-
-    for file_path, file_fixes in fixes_by_file.items():
-        original_content = file_map.get(file_path)
-        if original_content is None:
-            continue
-
-        updated_content = original_content
-        for fix in sorted(
-            file_fixes, key=lambda item: item.get("line_number", 0), reverse=True
-        ):
-            updated_content, applied = apply_fix_to_content(updated_content, fix)
-            if applied:
-                applied_ids.append(fix["fix_id"])
-
-        if updated_content != original_content:
-            if get_file_extension(file_path) == ".py":
-                if "os.environ.get(" in updated_content:
-                    updated_content = ensure_python_import_statement(
-                        updated_content, "os"
-                    )
-                if "ast.literal_eval(" in updated_content:
-                    updated_content = ensure_python_import_statement(
-                        updated_content, "ast"
-                    )
-            file_map[file_path] = updated_content
-            changed_paths.append(file_path)
+    applied_ids, changed_paths = _apply_fixes_to_files(file_map, fixes_by_file)
 
     if not changed_paths:
         raise HTTPException(
@@ -2306,7 +3182,13 @@ async def apply_repository_fixes(payload: ApplyRepositoryFixesRequest):
     )
 
 
-@api_router.get("/repository/sessions/{session_id}/download")
+@api_router.get(
+    "/repository/sessions/{session_id}/download",
+    responses={
+        404: {"description": ERROR_SESSION_NOT_FOUND},
+        400: {"description": "Session contains no patched files"},
+    },
+)
 async def download_patched_repository(session_id: str):
     session = await db.repository_sessions.find_one(
         {"session_id": session_id},
@@ -2338,16 +3220,62 @@ async def download_patched_repository(session_id: str):
     return StreamingResponse(buffer, media_type="application/zip", headers=headers)
 
 
+def _apply_fixes_to_files(
+    file_map: dict[str, str], fixes_by_file: dict[str, list[dict[str, Any]]]
+) -> tuple[list[str], list[str]]:
+    """Helper to iterate through files and apply their respective fixes."""
+    applied_ids = []
+    changed_paths = []
+
+    for file_path, file_fixes in fixes_by_file.items():
+        original_content = file_map.get(file_path)
+        if original_content is None:
+            continue
+
+        updated_content = original_content
+        # Sort fixes in reverse line order to prevent offset corruption
+        for fix in sorted(
+            file_fixes, key=lambda item: item.get("line_number", 0), reverse=True
+        ):
+            updated_content, applied = apply_fix_to_content(updated_content, fix)
+            if applied:
+                applied_ids.append(fix["fix_id"])
+
+        if updated_content != original_content:
+            updated_content = _ensure_required_imports(file_path, updated_content)
+            file_map[file_path] = updated_content
+            changed_paths.append(file_path)
+
+    return applied_ids, changed_paths
+
+
+def _ensure_required_imports(file_path: str, content: str) -> str:
+    """Add missing imports if specific patterns are found in the modified content."""
+    if get_file_extension(file_path) == ".py":
+        if "os.environ.get(" in content:
+            content = ensure_python_import_statement(content, "os")
+        if "ast.literal_eval(" in content:
+            content = ensure_python_import_statement(content, "ast")
+    return content
+
+
 @api_router.get("/governance/policy", response_model=GovernancePolicy)
 async def get_governance_policy():
     return await get_or_create_governance_policy()
 
 
-@api_router.put("/governance/policy", response_model=GovernancePolicy)
+@api_router.put(
+    "/governance/policy",
+    response_model=GovernancePolicy,
+    responses={
+        400: {"description": "Invalid providers"},
+        403: {"description": "Admin required"},
+    },
+)
 async def update_governance_policy(
     payload: GovernancePolicyUpdate,
-    x_actor_id: str | None = Header(default=None),
-    x_user_role: str | None = Header(default=None),
+    x_actor_id: Annotated[str | None, Header(default=None)] = None,
+    x_user_role: Annotated[str | None, Header(default=None)] = None,
 ):
     actor = resolve_actor_context(x_actor_id, x_user_role)
     require_admin(actor)
@@ -2430,80 +3358,25 @@ async def get_settings():
 
 @api_router.put("/settings", response_model=AnalyzerSettings)
 async def update_settings(payload: AnalyzerSettingsUpdate):
+    """Update global analyzer settings, severity thresholds, and provider configurations."""
     current_doc = await get_or_create_settings_doc()
     updated_doc = normalize_settings_doc(current_doc)
     updated_doc["severity"] = payload.severity.model_dump()
 
+    # Update AI Provider configurations
     incoming_providers = payload.providers or {}
     for provider in PROVIDER_KEYS:
-        provider_current = updated_doc["providers"].get(
-            provider, build_default_provider_config(provider)
+        updated_doc["providers"][provider] = _update_provider_config(
+            updated_doc["providers"].get(provider, {}),
+            incoming_providers.get(provider, {}),
+            payload,
+            provider,
         )
-        incoming_providers = payload.providers or {}
-        incoming = incoming_providers.get(provider) or {}
 
-        if payload.providers is None and provider == "ollama":
-            if payload.use_ollama is not None:
-                incoming["enabled"] = payload.use_ollama
-            if payload.ollama_base_url is not None:
-                incoming["base_url"] = payload.ollama_base_url
-            if payload.ollama_model is not None:
-                incoming["model"] = payload.ollama_model
-
-        merged = {
-            **provider_current,
-            "enabled": bool(
-                incoming.get("enabled", provider_current.get("enabled", False))
-            ),
-            "base_url": incoming.get("base_url", provider_current.get("base_url")),
-            "model": incoming.get("model", provider_current.get("model")),
-        }
-
-        if incoming.get("clear_api_key"):
-            merged["api_key_encrypted"] = None
-            merged["key_configured"] = False
-            merged["api_key_masked"] = None
-        else:
-            provided_key = incoming.get("api_key")
-            if isinstance(provided_key, str) and provided_key.strip():
-                encrypted = encrypt_value(provided_key.strip())
-                merged["api_key_encrypted"] = encrypted
-                merged["key_configured"] = True
-                merged["api_key_masked"] = mask_key(provided_key.strip())
-
-        merged.setdefault(
-            "api_key_encrypted", provider_current.get("api_key_encrypted")
-        )
-        merged.setdefault(
-            "key_configured", provider_current.get("key_configured", False)
-        )
-        merged.setdefault("api_key_masked", provider_current.get("api_key_masked"))
-        updated_doc["providers"][provider] = merged
-
-    routing_payload = payload.routing or {}
-    routing = {
-        "primary_provider": routing_payload.get(
-            "primary_provider",
-            updated_doc.get("routing", {}).get("primary_provider", "ollama"),
-        ),
-        "fallback_enabled": bool(
-            routing_payload.get(
-                "fallback_enabled",
-                updated_doc.get("routing", {}).get("fallback_enabled", True),
-            )
-        ),
-        "fallback_provider": routing_payload.get(
-            "fallback_provider",
-            updated_doc.get("routing", {}).get(
-                "fallback_provider", "openai_compatible"
-            ),
-        ),
-    }
-    if routing["primary_provider"] not in PROVIDER_KEYS:
-        raise HTTPException(status_code=400, detail="Invalid primary provider")
-    if routing["fallback_provider"] not in PROVIDER_KEYS:
-        raise HTTPException(status_code=400, detail="Invalid fallback provider")
-    updated_doc["routing"] = routing
+    # Update Routing logic
+    updated_doc["routing"] = _update_routing_config(
+        updated_doc.get("routing", {}), payload.routing or {}
+    )
 
     await db.app_settings.update_one(
         {"id": "default"},
@@ -2511,6 +3384,73 @@ async def update_settings(payload: AnalyzerSettingsUpdate):
         upsert=True,
     )
     return to_public_settings(updated_doc)
+
+
+def _update_provider_config(
+    current: dict[str, Any],
+    incoming: dict[str, Any],
+    payload: AnalyzerSettingsUpdate,
+    provider: str,
+) -> dict[str, Any]:
+    """Merge incoming provider settings with existing configuration."""
+    # Handle legacy top-level Ollama fields if providers dict wasn't provided
+    if payload.providers is None and provider == "ollama":
+        if payload.use_ollama is not None:
+            incoming["enabled"] = payload.use_ollama
+        if payload.ollama_base_url is not None:
+            incoming["base_url"] = payload.ollama_base_url
+        if payload.ollama_model is not None:
+            incoming["model"] = payload.ollama_model
+
+    merged = {
+        **current,
+        "enabled": bool(incoming.get("enabled", current.get("enabled", False))),
+        "base_url": incoming.get("base_url", current.get("base_url")),
+        "model": incoming.get("model", current.get("model")),
+    }
+
+    if incoming.get("clear_api_key"):
+        merged.update(
+            {"api_key_encrypted": None, "key_configured": False, "api_key_masked": None}
+        )
+    else:
+        provided_key = incoming.get("api_key")
+        if isinstance(provided_key, str) and provided_key.strip():
+            merged.update(
+                {
+                    "api_key_encrypted": encrypt_value(provided_key.strip()),
+                    "key_configured": True,
+                    "api_key_masked": mask_key(provided_key.strip()),
+                }
+            )
+
+    # Ensure persistence of existing keys if not modified
+    merged.setdefault("api_key_encrypted", current.get("api_key_encrypted"))
+    merged.setdefault("key_configured", current.get("key_configured", False))
+    merged.setdefault("api_key_masked", current.get("api_key_masked"))
+    return merged
+
+
+def _update_routing_config(
+    current: dict[str, Any], incoming: dict[str, Any]
+) -> dict[str, Any]:
+    """Update and validate primary/fallback provider routing."""
+    routing = {
+        "primary_provider": incoming.get(
+            "primary_provider", current.get("primary_provider", "ollama")
+        ),
+        "fallback_enabled": bool(
+            incoming.get("fallback_enabled", current.get("fallback_enabled", True))
+        ),
+        "fallback_provider": incoming.get(
+            "fallback_provider", current.get("fallback_provider", "openai_compatible")
+        ),
+    }
+    if routing["primary_provider"] not in PROVIDER_KEYS:
+        raise HTTPException(status_code=400, detail="Invalid primary provider")
+    if routing["fallback_provider"] not in PROVIDER_KEYS:
+        raise HTTPException(status_code=400, detail="Invalid fallback provider")
+    return routing
 
 
 # ---------------------------------------------------------------------------
@@ -2550,7 +3490,9 @@ class GithubClient:
 
         for attempt in range(max_retries + 1):
             try:
-                resp = requests.request(method, url, headers=self._headers, timeout=15, **kwargs)
+                resp = requests.request(
+                    method, url, headers=self._headers, timeout=15, **kwargs
+                )
 
                 # Check for retryable status codes
                 if resp.status_code in {429, 502, 503} and attempt < max_retries:
@@ -2571,7 +3513,7 @@ class GithubClient:
                 return None, {"status": "error", "reason": "timeout"}
             except requests.exceptions.ConnectionError:
                 return None, {"status": "error", "reason": "connection_error"}
-            except requests.exceptions.RequestException as exc:
+            except requests.exceptions.RequestException:
                 return None, {"status": "error", "reason": "request_exception"}
 
         # All retries exhausted
@@ -2619,9 +3561,7 @@ class GithubClient:
         self, owner: str, repo: str, path: str, ref: str
     ) -> str | None:
         url = f"{self.BASE}/repos/{owner}/{repo}/contents/{path}"
-        resp, status = self._request_with_retry(
-            "GET", url, params={"ref": ref}
-        )
+        resp, status = self._request_with_retry("GET", url, params={"ref": ref})
 
         if resp is None:
             logger.error(
@@ -2643,7 +3583,7 @@ class GithubClient:
         encoded = data.get("content", "")
         try:
             return base64.b64decode(encoded).decode("utf-8", errors="replace")
-        except Exception as exc:
+        except (binascii.Error, UnicodeDecodeError) as exc:
             logger.error(
                 "Failed to decode content for %s: %s", path, exc, exc_info=True
             )
@@ -2682,9 +3622,15 @@ class GithubClient:
 
         if resp is None:
             logger.error(
-                "GitHub inline comment failed: %s", status.get("reason"), extra={"fix": fix.title}
+                "GitHub inline comment failed: %s",
+                status.get("reason"),
+                extra={"fix": fix.title},
             )
-            return {"success": False, "status": status.get("status"), "reason": status.get("reason")}
+            return {
+                "success": False,
+                "status": status.get("status"),
+                "reason": status.get("reason"),
+            }
 
         if resp.status_code not in {200, 201}:
             logger.warning(
@@ -2692,7 +3638,11 @@ class GithubClient:
                 resp.status_code,
                 resp.text[:100],
             )
-            return {"success": False, "status": resp.status_code, "reason": "non_2xx_response"}
+            return {
+                "success": False,
+                "status": resp.status_code,
+                "reason": "non_2xx_response",
+            }
 
         logger.info(
             "GithubClient.post_pr_inline_comment completed successfully",
@@ -2732,10 +3682,12 @@ class GithubClient:
         resp, status = self._request_with_retry("POST", url, json={"body": body})
 
         if resp is None:
-            logger.error(
-                "GitHub summary comment failed: %s", status.get("reason")
-            )
-            return {"success": False, "status": status.get("status"), "reason": status.get("reason")}
+            logger.error("GitHub summary comment failed: %s", status.get("reason"))
+            return {
+                "success": False,
+                "status": status.get("status"),
+                "reason": status.get("reason"),
+            }
 
         if resp.status_code not in {200, 201}:
             logger.warning(
@@ -2743,11 +3695,13 @@ class GithubClient:
                 resp.status_code,
                 resp.text[:100],
             )
-            return {"success": False, "status": resp.status_code, "reason": "non_2xx_response"}
+            return {
+                "success": False,
+                "status": resp.status_code,
+                "reason": "non_2xx_response",
+            }
 
-        logger.info(
-            "GithubClient.post_pr_summary_comment completed successfully"
-        )
+        logger.info("GithubClient.post_pr_summary_comment completed successfully")
         return {"success": True, "status": "created"}
 
 
@@ -2780,7 +3734,12 @@ def _run_github_pr_pipeline_sync(
     repo_full_name: str = repository["full_name"]  # e.g. "owner/repo"
     if "/" not in repo_full_name:
         logger.error("GitHub repo full_name has no slash: %s", repo_full_name)
-        return {"status": "error", "reason": "invalid-repo-name", "comment_count": 0, "fix_count": 0}
+        return {
+            "status": "error",
+            "reason": "invalid-repo-name",
+            "comment_count": 0,
+            "fix_count": 0,
+        }
     owner, repo = repo_full_name.split("/", 1)
 
     github = GithubClient(token)
@@ -2845,9 +3804,9 @@ async def run_github_pr_pipeline(
             token,
             settings_doc,
         )
-    except Exception as exc:
+    except (requests.RequestException, json.JSONDecodeError, ValueError) as exc:
         logger.exception("GitHub PR pipeline error: %s", exc)
-        result = {"status": "error", "error": str(exc)}
+        result = {"status": STATUS_ERROR, "error": str(exc)}
 
     event = IntegrationEvent(
         source="github",
@@ -2875,11 +3834,15 @@ async def run_github_pr_pipeline(
 # ---------------------------------------------------------------------------
 
 
-@api_router.post("/integrations/git/webhook", response_model=IntegrationEvent)
+@api_router.post(
+    "/integrations/git/webhook",
+    response_model=IntegrationEvent,
+    responses={401: {"description": "Invalid webhook signature"}},
+)
 async def git_webhook(
     request: Request,
-    x_hub_signature_256: str | None = Header(default=None),
-    x_github_event: str | None = Header(default=None),
+    x_hub_signature_256: Annotated[str | None, Header(default=None)] = None,
+    x_github_event: Annotated[str | None, Header(default=None)] = None,
 ):
     raw_body = await request.body()
     try:
@@ -2936,7 +3899,11 @@ async def git_webhook(
     return event
 
 
-@api_router.post("/integrations/ci/event", response_model=IntegrationEvent)
+@api_router.post(
+    "/integrations/ci/event",
+    response_model=IntegrationEvent,
+    responses={400: {"description": "Invalid CI event payload"}},
+)
 async def ci_event(payload: CIEvent):
     event = IntegrationEvent(
         source="ci",
@@ -2958,7 +3925,11 @@ async def list_integration_events():
     return [IntegrationEvent(**event) for event in events]
 
 
-@api_router.put("/settings/github", response_model=GitHubSettingsPublic)
+@api_router.put(
+    "/settings/github",
+    response_model=GitHubSettingsPublic,
+    responses={400: {"description": "Invalid settings payload"}},
+)
 async def update_github_settings(payload: GitHubSettingsUpdate):
     """Store GitHub PAT and webhook secret (encrypted). Never returns the raw token."""
     settings_doc = await get_or_create_settings_doc()
@@ -2995,7 +3966,11 @@ async def update_github_settings(payload: GitHubSettingsUpdate):
     )
 
 
-@api_router.get("/integrations/github/status", response_model=GitHubSettingsPublic)
+@api_router.get(
+    "/integrations/github/status",
+    response_model=GitHubSettingsPublic,
+    responses={404: {"description": "GitHub configuration not found"}},
+)
 async def get_github_status():
     """Return GitHub integration status (token configured, webhook secret configured)."""
     settings_doc = await get_or_create_settings_doc()
@@ -3051,8 +4026,6 @@ async def add_security_headers(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     return response
-
-
 
 
 app.add_middleware(

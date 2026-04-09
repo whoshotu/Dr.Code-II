@@ -12,7 +12,7 @@ def build_diagram_prompt(
     diagram_type: str,
 ) -> str:
     lang = language.lower()
-    
+
     prompt = f"""Generate a Mermaid {diagram_type} diagram for the following {lang} code.
 
 Source Code:

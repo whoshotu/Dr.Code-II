@@ -8,56 +8,25 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-echo -e "${CYAN}======================================"
-echo "  DR.CODE v2 - 'Judge-Ready' Setup"
-echo -e "======================================${NC}"
-
-# --- Detection with Timeout ---
-check_with_timeout() {
-    local cmd="$1"
-    local timeout_sec="${2:-2}"
-    timeout "$timeout_sec" bash -c "$cmd" &>/dev/null
+# --- Port Detection ---
+is_port_in_use() {
+    local port=$1
+    (echo >/dev/tcp/localhost/"$port") &>/dev/null
     return $?
 }
 
-
-detect_ollama() {
-    # Check 1: Native Ollama CLI
-    if command -v ollama &> /dev/null; then
-        if ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
-            echo -e "${YELLOW}Starting local Ollama server in background...${NC}"
-            ollama serve >/dev/null 2>&1 &
-            sleep 3
+find_next_open_port() {
+    local start_port=$1
+    local port=$start_port
+    while is_port_in_use "$port"; do
+        echo -e "${YELLOW}Port $port is occupied, trying $((port + 1))...${NC}"
+        port=$((port + 1))
+        if [ "$port" -gt $((start_port + 20)) ]; then
+            echo -e "${RED}Error: Could not find an open port after 20 attempts.${NC}"
+            exit 1
         fi
-        OLLAMA_BASE_URL="http://localhost:11434"
-        echo -e "${GREEN}✓ Ollama is running locally on localhost:11434${NC}"
-
-        # Count available models (subtract 1 for the header line)
-        local model_count=$(ollama list | tail -n +2 | grep -v "^$" | wc -l)
-        if [ "$model_count" -eq 0 ]; then
-            echo -e "${YELLOW}⚠ No models found locally.${NC}"
-            read -p "Would you like to install a quick coding model (qwen2.5-coder:7b)? [y/N]: " install_model
-            if [[ "$install_model" =~ ^[Yy]$ ]]; then
-                echo -e "${CYAN}Installing model... this may take a few minutes.${NC}"
-                ollama pull qwen2.5-coder:7b
-                OLLAMA_MODEL="qwen2.5-coder:7b"
-            fi
-        else
-            echo -e "${GREEN}Available Ollama models:${NC}"
-            ollama list
-        fi
-        return 0
-    fi
-    
-    # Check 2: Docker container named "ollama"
-    if docker ps --format "{{.Names}}" 2>/dev/null | grep -qi "^ollama$"; then
-        OLLAMA_BASE_URL="http://host.docker.internal:11434"
-        echo -e "${GREEN}✓ Ollama detected in Docker container${NC}"
-        return 0
-    fi
-    
-    echo -e "${YELLOW}⚠ No Ollama detected${NC}"
-    return 1
+    done
+    echo "$port"
 }
 
 check_docker() {
@@ -74,68 +43,94 @@ check_docker() {
     echo -e "${GREEN}✓ Docker ready${NC}"
 }
 
-detect_all_deps() {
-    echo -e "${CYAN}Detecting dependencies...${NC}"
-    local deps_found=0
-    
-    # Try Ollama
-    if detect_ollama; then
-        deps_found=$((deps_found + 1))
-    else
-        echo "  → Configure Ollama later via Settings UI"
+detect_ollama() {
+    if command -v ollama &> /dev/null; then
+        if ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
+            echo -e "${YELLOW}Ollama CLI found but server not responding.${NC}"
+            read -p "Would you like to try starting the local Ollama server? [y/N]: " start_ollama
+            if [[ "$start_ollama" =~ ^[Yy]$ ]]; then
+                ollama serve >/dev/null 2>&1 &
+                sleep 3
+            fi
+        fi
+        
+        if curl -sf http://localhost:11434/api/tags &>/dev/null; then
+            OLLAMA_BASE_URL="http://localhost:11434"
+            echo -e "${GREEN}✓ Ollama is running locally on localhost:11434${NC}"
+            return 0
+        fi
     fi
-    
-    # Auto-configure defaults if all found
-    if [ $deps_found -eq 1 ]; then
-        echo ""
-        echo -e "${GREEN}✅ Quick Start: dependencies found, auto-configuring...${NC}"
-        return 0
-    else
-        echo ""
-        echo -e "${YELLOW}⚠ Some dependencies missing - will prompt for configuration${NC}"
-        return 1
-    fi
+    return 1
+}
+
+setup_ports() {
+    echo ""
+    echo -e "${CYAN}Step 1: Network Configuration${NC}"
+    echo "Scanning for available ports..."
+    BACKEND_PORT=$(find_next_open_port ${BACKEND_PORT:-8002})
+    FRONTEND_PORT=$(find_next_open_port ${FRONTEND_PORT:-3001})
+    echo -e "${GREEN}✓ Backend assigned to port: $BACKEND_PORT${NC}"
+    echo -e "${GREEN}✓ Frontend assigned to port: $FRONTEND_PORT${NC}"
 }
 
 setup_ai() {
     echo ""
-    echo -e "${CYAN}Step 1: AI Model Configuration${NC}"
-    
-    if [ -n "$OLLAMA_BASE_URL" ]; then
-        echo -e "${GREEN}✓ Auto-detected: $OLLAMA_BASE_URL${NC}"
-    else
-        echo "  1) Use Local Ollama (Recommended)"
-        echo "  2) Use OpenAI (Cloud)"
-        echo "  3) Skip (Configure later)"
-        read -p "Choose [1]: " ai_choice
-        ai_choice=${ai_choice:-1}
-        
-        if [ "$ai_choice" = "1" ]; then
+    echo -e "${CYAN}Step 2: AI Provider Configuration${NC}"
+    echo "Current settings: Provider=${ACTIVE_PROVIDER:-ollama}, Model=${AI_MODEL_NAME:-$OLLAMA_MODEL}"
+    echo "1) Local Ollama (Privacy-first, requires local GPU/CPU)"
+    echo "2) Hosted Provider (OpenAI, Gemini, Anthropic)"
+    read -p "Choose AI infrastructure [${USE_OLLAMA_CHOICE:-1}]: " ai_choice
+    ai_choice=${ai_choice:-${USE_OLLAMA_CHOICE:-1}}
+
+    if [ "$ai_choice" = "1" ]; then
+        USE_OLLAMA=true
+        if detect_ollama; then
+            echo -e "${GREEN}Available Ollama models:${NC}"
+            ollama list | tail -n +2 || echo "None found."
+            read -p "Enter model name [${OLLAMA_MODEL:-qwen2.5-coder:7b}]: " OLLAMA_MODEL
+            OLLAMA_MODEL=${OLLAMA_MODEL:-${OLLAMA_MODEL:-qwen2.5-coder:7b}}
             OLLAMA_BASE_URL="http://localhost:11434"
-        elif [ "$ai_choice" = "2" ]; then
-            read -p "Enter OpenAI API key: " OPENAI_API_KEY
-            OLLAMA_BASE_URL="https://api.openai.com/v1"
-            OLLAMA_MODEL="gpt-4o"
-            read -p "Enter OpenAI model [gpt-4o]: " OLLAMA_MODEL
-            OLLAMA_MODEL=${OLLAMA_MODEL:-gpt-4o}
+        else
+            echo -e "${YELLOW}⚠ Ollama not detected. Please install it from https://ollama.com${NC}"
+            read -p "Proceed anyway with default settings? [y/N]: " proceed
+            if [[ ! "$proceed" =~ ^[Yy]$ ]]; then exit 1; fi
+            OLLAMA_BASE_URL="http://localhost:11434"
+            OLLAMA_MODEL="qwen2.5-coder:7b"
         fi
-    fi
-    
-    if [ -z "$OLLAMA_MODEL" ]; then
-        read -p "Enter model name [qwen2.5-coder:7b]: " OLLAMA_MODEL
-        OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5-coder:7b}
+    else
+        USE_OLLAMA=false
+        echo "Select Hosted Provider:"
+        echo "  1) OpenAI"
+        echo "  2) Gemini"
+        echo "  3) Anthropic"
+        read -p "Choose [${HOSTED_CHOICE:-1}]: " provider_choice
+        provider_choice=${provider_choice:-${HOSTED_CHOICE:-1}}
+        
+        case $provider_choice in
+            1) ACTIVE_PROVIDER="openai"; DEFAULT_MODEL="gpt-4o" ;;
+            2) ACTIVE_PROVIDER="gemini"; DEFAULT_MODEL="gemini-1.5-pro" ;;
+            3) ACTIVE_PROVIDER="anthropic"; DEFAULT_MODEL="claude-3-5-sonnet-20240620" ;;
+        esac
+        
+        # Load existing API key if available
+        EXISTING_KEY_VAR="${ACTIVE_PROVIDER^^}_API_KEY"
+        read -p "Enter API Key for $ACTIVE_PROVIDER [${!EXISTING_KEY_VAR:-(Keep Existing)}]: " PROVIDER_API_KEY
+        PROVIDER_API_KEY=${PROVIDER_API_KEY:-${!EXISTING_KEY_VAR}}
+        
+        read -p "Enter model name [${AI_MODEL_NAME:-$DEFAULT_MODEL}]: " AI_MODEL_NAME
+        AI_MODEL_NAME=${AI_MODEL_NAME:-${AI_MODEL_NAME:-$DEFAULT_MODEL}}
     fi
 }
 
 setup_github() {
     echo ""
-    echo -e "${CYAN}Step 2: GitHub Integration (Optional)${NC}"
+    echo -e "${CYAN}Step 3: GitHub Integration (Optional)${NC}"
     
-    if [ -z "$GITHUB_TOKEN" ]; then
-        read -p "GitHub Token (Enter to skip): " GITHUB_TOKEN
-        if [ -n "$GITHUB_TOKEN" ]; then
-            read -p "Webhook Secret: " GITHUB_WEBHOOK_SECRET
-        fi
+    read -p "GitHub Token [${GITHUB_TOKEN:-(Enter to skip)}]: " GITHUB_TOKEN
+    GITHUB_TOKEN=${GITHUB_TOKEN:-$GITHUB_TOKEN}
+    if [ -n "$GITHUB_TOKEN" ]; then
+        read -p "Webhook Secret [${GITHUB_WEBHOOK_SECRET:-(Required if token provided)}]: " GITHUB_WEBHOOK_SECRET
+        GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-$GITHUB_WEBHOOK_SECRET}
     fi
 }
 
@@ -143,72 +138,72 @@ save_config() {
     echo ""
     echo -e "${CYAN}Saving configuration...${NC}"
     
-    # Never overwrite existing .env
-    if [ -f .env ] && [ -s .env ]; then
-        echo -e "${YELLOW}⚠ .env exists, not overwriting${NC}"
-        USE_EXISTING_ENV=true
-    else
-        USE_EXISTING_ENV=false
-    fi
-    
-    # Generate .env if doesn't exist
-    if [ "$USE_EXISTING_ENV" = false ]; then
-        cat > .env << EOF
-# DR.CODE-v2 'Judge-Ready' Environment
-OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://localhost:11434}
-OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5-coder:7b}
-CORS_ORIGINS=http://localhost:3001
+    # Core .env
+    cat > .env << EOF
+# Dr.Code-II Environment
+BACKEND_PORT=$BACKEND_PORT
+FRONTEND_PORT=$FRONTEND_PORT
+REACT_APP_BACKEND_URL=http://localhost:$BACKEND_PORT
+CORS_ORIGINS=http://localhost:$FRONTEND_PORT
 DB_TYPE=sqlite
 EOF
 
-        if [ -n "$GITHUB_TOKEN" ]; then
-            echo "GITHUB_TOKEN=$GITHUB_TOKEN" >> .env
-        fi
-        if [ -n "$GITHUB_WEBHOOK_SECRET" ]; then
-            echo "GITHUB_WEBHOOK_SECRET=$GITHUB_WEBHOOK_SECRET" >> .env
-        fi
-        echo -e "${GREEN}✓ Config saved to .env${NC}"
+    if [ "$USE_OLLAMA" = true ]; then
+        echo "OLLAMA_BASE_URL=$OLLAMA_BASE_URL" >> .env
+        echo "OLLAMA_MODEL=$OLLAMA_MODEL" >> .env
     else
-        echo -e "${GREEN}✓ Using existing .env configuration${NC}"
+        echo "ACTIVE_PROVIDER=$ACTIVE_PROVIDER" >> .env
+        echo "${ACTIVE_PROVIDER^^}_API_KEY=$PROVIDER_API_KEY" >> .env
+        echo "AI_MODEL_NAME=$AI_MODEL_NAME" >> .env
     fi
 
-    # Always generate .env.docker (for Docker Compose)
+    [ -n "$GITHUB_TOKEN" ] && echo "GITHUB_TOKEN=$GITHUB_TOKEN" >> .env
+    [ -n "$GITHUB_WEBHOOK_SECRET" ] && echo "GITHUB_WEBHOOK_SECRET=$GITHUB_WEBHOOK_SECRET" >> .env
+
+    # .env.docker
     cat > .env.docker << EOF
-# DR.CODE-v2 'Judge-Ready' Environment (Docker)
-OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5-coder:7b}
-CORS_ORIGINS=http://localhost:3001
+# Dr.Code-II Environment (Docker)
+BACKEND_PORT=$BACKEND_PORT
+FRONTEND_PORT=$FRONTEND_PORT
+REACT_APP_BACKEND_URL=http://localhost:$BACKEND_PORT
+CORS_ORIGINS=http://localhost:$FRONTEND_PORT
 DB_TYPE=sqlite
 EOF
 
-    if [ -n "$GITHUB_TOKEN" ]; then
-        echo "GITHUB_TOKEN=$GITHUB_TOKEN" >> .env.docker
-    fi
-    if [ -n "$GITHUB_WEBHOOK_SECRET" ]; then
-        echo "GITHUB_WEBHOOK_SECRET=$GITHUB_WEBHOOK_SECRET" >> .env.docker
+    if [ "$USE_OLLAMA" = true ]; then
+        echo "OLLAMA_BASE_URL=http://host.docker.internal:11434" >> .env.docker
+        echo "OLLAMA_MODEL=$OLLAMA_MODEL" >> .env.docker
+    else
+        echo "ACTIVE_PROVIDER=$ACTIVE_PROVIDER" >> .env.docker
+        echo "${ACTIVE_PROVIDER^^}_API_KEY=$PROVIDER_API_KEY" >> .env.docker
+        echo "AI_MODEL_NAME=$AI_MODEL_NAME" >> .env.docker
     fi
     
-    echo -e "${GREEN}✓ Config saved to .env.docker${NC}"
+    [ -n "$GITHUB_TOKEN" ] && echo "GITHUB_TOKEN=$GITHUB_TOKEN" >> .env.docker
+    [ -n "$GITHUB_WEBHOOK_SECRET" ] && echo "GITHUB_WEBHOOK_SECRET=$GITHUB_WEBHOOK_SECRET" >> .env.docker
+    
+    echo -e "${GREEN}✓ Config saved to .env and .env.docker${NC}"
+}
+
+start_services() {
+    echo ""
+    echo -e "${CYAN}Starting DR.CODE services...${NC}"
+    if docker compose version &>/dev/null; then COMPOSE_CMD="docker compose"; else COMPOSE_CMD="docker-compose"; fi
+    $COMPOSE_CMD up -d
 }
 
 run_health_checks() {
     echo ""
     echo -e "${CYAN}Running startup health checks...${NC}"
-    
-    # Wait for services to start
-    echo "  Waiting for container to initialize..."
+    echo "  Waiting for container to initialize on port ${BACKEND_PORT}..."
     for i in {1..15}; do
-        if curl -sf http://localhost:8002/api/health &>/dev/null; then
-            break
-        fi
+        if curl -sf http://localhost:${BACKEND_PORT}/api/health &>/dev/null; then break; fi
         sleep 2
     done
-    
-    # Unified health check
-    if curl -sf http://localhost:8002/api/health &>/dev/null; then
-        echo -e "${GREEN}✓ DR.CODE Subsystem (8002): OK${NC}"
+    if curl -sf http://localhost:${BACKEND_PORT}/api/health &>/dev/null; then
+        echo -e "${GREEN}✓ DR.CODE Subsystem (${BACKEND_PORT}): OK${NC}"
     else
-        echo -e "${RED}✗ Health check failed - check logs with 'docker compose logs'${NC}"
+        echo -e "${RED}✗ Health check failed${NC}"
     fi
 }
 
@@ -219,60 +214,57 @@ print_summary() {
     echo -e "======================================${NC}"
     echo ""
     echo "  Service Endpoints:"
-    echo "    - DR.CODE Web UI & API: http://localhost:8002"
-    echo "    - Ollama Daemon: $OLLAMA_BASE_URL (auto-detected)"
-    echo "    - Recommended Model: ${OLLAMA_MODEL:-qwen2.5-coder:7b}"
-    echo "  "
-    echo "  GitHub Integration:"
-    if [ -n "$GITHUB_TOKEN" ]; then
-        echo "    - Token: ✅ Configured"
-        if [ -n "$GITHUB_WEBHOOK_SECRET" ]; then
-            echo "    - Webhook Secret: ✅ Configured"
-        else
-            echo "    - Webhook Secret: ⚠ Not configured (HMAC check disabled)"
-        fi
-    else
-        echo "    - Token: ⚠ Not configured (webhooks won't analyze)"
-    fi
-    echo "  "
-    echo "Commands:"
-    echo "  docker compose up -d    # Start services"
-    echo "  docker compose down     # Stop services"
-    echo "  docker compose logs -f  # View activity"
-    echo "  curl http://localhost:8002/api/health  # Health check"
+    echo "    - API/Backend: http://localhost:${BACKEND_PORT}"
+    echo "    - Web UI (Expected): http://localhost:${FRONTEND_PORT}"
+    [ "$USE_OLLAMA" = true ] && echo "    - Provider: Ollama ($OLLAMA_MODEL)" || echo "    - Provider: $ACTIVE_PROVIDER ($AI_MODEL_NAME)"
     echo ""
 }
 
-# Main Execution
-check_docker
-
-# Try auto-detection first
-if detect_all_deps; then
-    SKIP_PROMPTS=true
-else
-    SKIP_PROMPTS=false
-fi
-
-if [ "$SKIP_PROMPTS" = false ]; then
+full_setup() {
+    check_docker
+    setup_ports
     setup_ai
     setup_github
-fi
+    save_config
+    start_services
+    run_health_checks
+    print_summary
+}
 
-save_config
+echo -e "${CYAN}======================================"
+echo "  DR.CODE v2 - Advanced Orchestration"
+echo -e "======================================${NC}"
+echo "1) Fresh setup"
+echo "2) Re-run setup (keep existing config)"
+echo "3) Reset config and re-setup"
+read -p "Choose [1]: " choice
+choice=${choice:-1}
 
-echo ""
-echo -e "${CYAN}Starting DR.CODE services...${NC}"
-
-# Try 'docker compose' (modern) fallback to 'docker-compose' (legacy)
-if docker compose version &>/dev/null; then
-    COMPOSE_CMD="docker compose"
-else
-    COMPOSE_CMD="docker-compose"
-fi
-
-$COMPOSE_CMD up -d
-
-# Run health checks
-run_health_checks
-
-print_summary
+case $choice in
+    1)
+        full_setup
+        ;;
+    2)
+        if [ -f .env ]; then
+            echo -e "${YELLOW}Loading existing configuration...${NC}"
+            # Export to make them available in functions
+            set -a; source .env; set +a
+            [ -n "$OLLAMA_BASE_URL" ] && USE_OLLAMA_CHOICE=1 || USE_OLLAMA_CHOICE=2
+            case "$ACTIVE_PROVIDER" in
+                openai) HOSTED_CHOICE=1 ;;
+                gemini) HOSTED_CHOICE=2 ;;
+                anthropic) HOSTED_CHOICE=3 ;;
+            esac
+        fi
+        full_setup
+        ;;
+    3)
+        echo -e "${RED}Resetting configuration...${NC}"
+        rm -f .env .env.docker
+        full_setup
+        ;;
+    *)
+        echo "Invalid choice."
+        exit 1
+        ;;
+esac

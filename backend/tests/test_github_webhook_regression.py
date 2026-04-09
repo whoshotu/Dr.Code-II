@@ -103,7 +103,10 @@ class TestWebhookGitHubPRPayload:
         status='skipped-no-token' and NOT crash the server.
         """
         # Ensure token and secret are cleared first
-        api_client.put(f"{base_url}/api/settings/github", json={"clear_token": True, "webhook_secret": ""})
+        api_client.put(
+            f"{base_url}/api/settings/github",
+            json={"clear_token": True, "webhook_secret": ""},
+        )
 
         # Minimal GitHub pull_request webhook shape (action: opened)
         pr_payload = {
@@ -133,8 +136,11 @@ class TestWebhookGitHubPRPayload:
         ignored-action:closed and not trigger analysis.
         """
         # Clear any webhook secret that might be set from previous tests
-        api_client.put(f"{base_url}/api/settings/github", json={"clear_token": True, "webhook_secret": ""})
-        
+        api_client.put(
+            f"{base_url}/api/settings/github",
+            json={"clear_token": True, "webhook_secret": ""},
+        )
+
         pr_payload = {
             "action": "closed",
             "pull_request": {

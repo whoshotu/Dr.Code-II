@@ -9,6 +9,7 @@ import ReportDetailPage from "@/pages/ReportDetailPage";
 import GovernancePage from "@/pages/GovernancePage";
 import IntegrationsPage from "@/pages/IntegrationsPage";
 import SettingsPage from "@/pages/SettingsPage";
+import TrashPage from "@/pages/TrashPage";
 
 function App() {
   return (
@@ -23,6 +24,7 @@ function App() {
             <Route path="/governance" element={<GovernancePage />} />
             <Route path="/integrations" element={<IntegrationsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/trash" element={<TrashPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>

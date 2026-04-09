@@ -1,5 +1,7 @@
-"""SQLite database adapter for DR.CODE-v2."""
+"""SQLite database adapter for Dr.Code-II."""
+
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 import aiosqlite
@@ -7,6 +9,7 @@ import aiosqlite
 
 class SQLiteCollection:
     """A single table/collection abstraction over SQLite."""
+
     def __init__(self, db_path: str, table_name: str):
         self.db_path = db_path
         self.table_name = table_name
@@ -34,15 +37,13 @@ class SQLiteCollection:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 f"INSERT INTO {self.table_name} (id, data) VALUES (?, ?)",
-                (doc_id, json.dumps(document))
+                (doc_id, json.dumps(document)),
             )
             await db.commit()
         return MagicResult(doc_id)
 
     async def find_one(
-        self,
-        query_filter: dict[str, Any],
-        projection: dict[str, Any] | None = None
+        self, query_filter: dict[str, Any], projection: dict[str, Any] | None = None
     ):
         """Find a single document matching the given query filter."""
         # Simplified Mongo-to-SQL filter: resolve known document ID fields
@@ -69,10 +70,7 @@ class SQLiteCollection:
         return None
 
     async def update_one(
-        self,
-        query_filter: dict[str, Any],
-        update: dict[str, Any],
-        upsert: bool = False
+        self, query_filter: dict[str, Any], update: dict[str, Any], upsert: bool = False
     ):
         """Update a single document matching the query filter."""
         doc_id = (
@@ -102,14 +100,36 @@ class SQLiteCollection:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 f"UPDATE {self.table_name} SET data = ? WHERE id = ?",
-                (json.dumps(existing), doc_id)
+                (json.dumps(existing), doc_id),
             )
+            await db.commit()
+
+    async def delete_one(self, query_filter: dict[str, Any]):
+        """Delete a single document matching the query filter."""
+        doc_id = (
+            query_filter.get("id")
+            or query_filter.get("report_id")
+            or query_filter.get("session_id")
+        )
+        if not doc_id:
+            return
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(f"DELETE FROM {self.table_name} WHERE id = ?", (doc_id,))
+            await db.commit()
+
+    async def delete_many(self, query_filter: dict[str, Any] | None = None):
+        """Delete all documents matching the query filter (clears table if filter is empty)."""
+        # We only support clearing the whole table for now per simplify-SQL rule
+        _ = query_filter
+        sql = f"DELETE FROM {self.table_name}"
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(sql)
             await db.commit()
 
     def find(
         self,
         query_filter: dict[str, Any] | None = None,
-        projection: dict[str, Any] | None = None
+        projection: dict[str, Any] | None = None,
     ):
         """Find multiple documents matching the query filter."""
         return SQLiteCursor(
@@ -125,7 +145,7 @@ class SQLiteCursor:
         db_path: str,
         table_name: str,
         query_filter: dict[str, Any],
-        projection: dict[str, Any]
+        projection: dict[str, Any],
     ):
         self.db_path = db_path
         self.table_name = table_name
@@ -160,12 +180,14 @@ class SQLiteCursor:
 # pylint: disable=too-few-public-methods
 class MagicResult:
     """A wrapper mimicking MongoDB's InsertOneResult."""
+
     def __init__(self, inserted_id):
         self.inserted_id = inserted_id
 
 
 class SQLiteDatabase:
     """Main database abstraction providing access to multiple collections."""
+
     def __init__(self, db_path: str):
         self.db_path = db_path
         self._collections = {}
@@ -180,9 +202,51 @@ class SQLiteDatabase:
         """Initialize all known foundational tables in the database."""
         # List of tables to initialize
         tables = [
-            "app_settings", "governance_audit_logs", "governance_policies",
-            "integration_events", "quality_metrics", "reports",
-            "repository_sessions", "security_events"
+            "app_settings",
+            "governance_audit_logs",
+            "governance_policies",
+            "integration_events",
+            "quality_metrics",
+            "reports",
+            "repository_sessions",
+            "security_events",
+            "trash",
         ]
         for t in tables:
             await getattr(self, t).init_table()
+
+    async def clear_analysis_tables(self):
+        """Clear active analysis data."""
+        await self.reports.delete_many()
+        await self.repository_sessions.delete_many()
+
+    async def move_to_trash(self, item_id: str):
+        """Move a specific report to trash."""
+        report = await self.reports.find_one({"report_id": item_id})
+        if report:
+            report["trashed_at"] = datetime.now(timezone.utc).isoformat()
+            report["type"] = "report"
+            await self.trash.insert_one(report)
+            await self.reports.delete_one({"report_id": item_id})
+            return True
+        return False
+
+    async def move_all_to_trash(self):
+        """Archive all existing reports to trash."""
+        reports = await self.reports.find().to_list(1000)
+        for r in reports:
+            r["trashed_at"] = datetime.now(timezone.utc).isoformat()
+            r["type"] = "report"
+            r["id"] = r.get("report_id")
+            await self.trash.insert_one(r)
+
+        sessions = await self.repository_sessions.find().to_list(1000)
+        for s in sessions:
+            s["trashed_at"] = datetime.now(timezone.utc).isoformat()
+            s["type"] = "session"
+            s["id"] = s.get("session_id")
+            await self.trash.insert_one(s)
+
+    async def get_trash_contents(self):
+        """Return all items in the trash collection."""
+        return await self.trash.find().sort("trashed_at", -1).to_list(200)

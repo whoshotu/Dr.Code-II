@@ -84,7 +84,9 @@ def extract_js_functions(code: str) -> list[FunctionInfo]:
     for match in re.finditer(r"function\s+(\w+)\s*\((.*?)\)", code):
         name = match.group(1)
         params_str = match.group(2)
-        params = [p.strip().split(":")[0].strip() for p in params_str.split(",") if p.strip()]
+        params = [
+            p.strip().split(":")[0].strip() for p in params_str.split(",") if p.strip()
+        ]
         functions.append(
             FunctionInfo(
                 name=name,
@@ -98,7 +100,9 @@ def extract_js_functions(code: str) -> list[FunctionInfo]:
     for match in re.finditer(r"const\s+(\w+)\s*=\s*(?:async\s*)?\((.*?)\)\s*=>", code):
         name = match.group(1)
         params_str = match.group(2)
-        params = [p.strip().split(":")[0].strip() for p in params_str.split(",") if p.strip()]
+        params = [
+            p.strip().split(":")[0].strip() for p in params_str.split(",") if p.strip()
+        ]
         functions.append(
             FunctionInfo(
                 name=name,
@@ -199,7 +203,9 @@ def validate_syntax(code: str, language: str) -> Tuple[bool, str | None]:
     return True, None
 
 
-def call_llm_for_tests(prompt: str, settings_doc: dict[str, Any] | None = None) -> str | None:
+def call_llm_for_tests(
+    prompt: str, settings_doc: dict[str, Any] | None = None
+) -> str | None:
     try:
         if settings_doc is None:
             import asyncio
@@ -301,7 +307,13 @@ def generate_tests(
             "coverage_notes": "",
         }
 
-    test_count = len([line for line in test_code.split("\n") if "def test_" in line or "it(" in line or "test(" in line])
+    test_count = len(
+        [
+            line
+            for line in test_code.split("\n")
+            if "def test_" in line or "it(" in line or "test(" in line
+        ]
+    )
 
     coverage_notes = f"Generated {test_count} test(s) for {len(functions)} function(s): {', '.join(f.name for f in functions)}"
 

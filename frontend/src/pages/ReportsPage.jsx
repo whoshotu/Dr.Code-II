@@ -1,33 +1,66 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { AlertTriangle, Clock3 } from "lucide-react";
+import { AlertTriangle, Clock3, Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { api } from "@/services/api";
+import { toast } from "sonner";
 
 export default function ReportsPage() {
   const navigate = useNavigate();
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  const loadReports = async () => {
+    setLoading(true);
+    try {
+      const data = await api.getReports();
+      setReports(data);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const loadReports = async () => {
-      try {
-        const data = await api.getReports();
-        setReports(data);
-      } finally {
-        setLoading(false);
-      }
-    };
     loadReports();
   }, []);
 
+  const handleResetAnalysis = async () => {
+    if (confirm("Are you sure you want to clear all active reports? They will be archived to trash.")) {
+      try {
+        await api.resetAnalysis();
+        toast.success("Analysis state archived to trash");
+        loadReports();
+      } catch (err) {
+        toast.error("Failed to reset analysis");
+      }
+    }
+  };
+
+  const handleTrashFile = async (reportId) => {
+    try {
+      await api.trashFile(reportId);
+      toast.success("Report moved to trash");
+      loadReports();
+    } catch (err) {
+      toast.error("Failed to trash report");
+    }
+  };
+
   return (
     <section className="space-y-6" data-testid="reports-page">
-      <div className="rounded-xl border border-border bg-card/70 p-6" data-testid="reports-header-card">
-        <h2 className="text-4xl font-bold tracking-tight" data-testid="reports-heading">Analysis Reports</h2>
-        <p className="mt-2 text-base text-muted-foreground" data-testid="reports-subheading">Review historical scans and drill down into suggested fixes.</p>
+      <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border bg-card/70 p-6" data-testid="reports-header-card">
+        <div>
+          <h2 className="text-4xl font-bold tracking-tight" data-testid="reports-heading">Analysis Reports</h2>
+          <p className="mt-2 text-base text-muted-foreground" data-testid="reports-subheading">Review historical scans and drill down into suggested fixes.</p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" data-testid="view-trash-button" onClick={() => navigate("/trash")}>View Trash</Button>
+          <Button variant="destructive" data-testid="clear-all-button" onClick={handleResetAnalysis} disabled={reports.length === 0}>
+            Clear All
+          </Button>
+        </div>
       </div>
 
       <div className="space-y-4" data-testid="reports-list">
@@ -41,7 +74,18 @@ export default function ReportsPage() {
               <CardHeader>
                 <CardTitle className="flex flex-wrap items-center justify-between gap-2">
                   <span data-testid={`report-filename-${report.report_id}`}>{report.filename}</span>
-                  <Badge variant="secondary" data-testid={`report-mode-${report.report_id}`}>{report.mode}</Badge>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="secondary" data-testid={`report-mode-${report.report_id}`}>{report.mode}</Badge>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                      onClick={() => handleTrashFile(report.report_id)}
+                      data-testid={`trash-report-${report.report_id}`}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
