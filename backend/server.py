@@ -2751,6 +2751,7 @@ async def analyze_endpoint(
     settings_doc = await get_or_create_settings_doc()
     thresholds = SeverityThresholds(**settings_doc["severity"])
     policy = await get_or_create_governance_policy()
+    mode = "rule-based"  # Default mode
     cleaned_code = payload.code.strip()
     if not cleaned_code:
         raise HTTPException(status_code=400, detail="Code input cannot be empty")
