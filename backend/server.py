@@ -1,13 +1,3 @@
-from pathlib import Path
-import sys
-import os
-
-# Add project root to sys.path to allow 'from backend.xxx' imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
-
 import asyncio
 import base64
 import binascii
@@ -19,14 +9,23 @@ import logging
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
 import zipfile
 from datetime import datetime, timezone
+from pathlib import Path
 from time import perf_counter
 from typing import Any, Annotated
 
+# Add project root to sys.path to allow 'from backend.xxx' imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+# Third-party imports
 import requests
 from cryptography.fernet import Fernet, InvalidToken
 from dotenv import load_dotenv
@@ -36,7 +35,6 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 from starlette.middleware.cors import CORSMiddleware
 
-# Moved imports to facilitate top-level package resolution
 from backend.database_sqlite import SQLiteDatabase
 from backend.generators.diagram_generator import generate_diagram
 from backend.generators.docstring_generator import generate_docstrings
@@ -960,6 +958,7 @@ def rule_based_slop_detection(
 def _check_line_length(
     issues: list[Issue], idx: int, line: str, thresholds: SeverityThresholds
 ):
+    """Check if line exceeds maximum length and add issue if so."""
     if len(line) > 120:
         issues.append(
             build_issue(
@@ -978,6 +977,7 @@ def _check_line_length(
 def _check_secrets(
     issues: list[Issue], idx: int, line: str, thresholds: SeverityThresholds
 ):
+    """Check for hardcoded secrets and add issue if found."""
     if re.search(
         r"(password|secret|token|api_key)\s*=\s*['\"][^'\"]+['\"]",
         line,
@@ -1000,6 +1000,7 @@ def _check_secrets(
 def _check_dynamic_execution(
     issues: list[Issue], idx: int, line: str, thresholds: SeverityThresholds
 ):
+    """Check for dynamic execution risks (eval/exec) and add issue if found."""
     if re.search(r"\b(eval|exec)\s*\(", line):
         issues.append(
             build_issue(
@@ -1018,6 +1019,7 @@ def _check_dynamic_execution(
 def _check_variable_naming(
     issues: list[Issue], idx: int, line: str, thresholds: SeverityThresholds
 ):
+    """Check for poorly named variables and add issue if found."""
     var_match = re.search(r"\b([a-zA-Z_]\w*)\s*=", line)
     if var_match:
         var_name = var_match.group(1)
@@ -1039,6 +1041,7 @@ def _check_variable_naming(
 def _check_magic_numbers(
     issues: list[Issue], idx: int, line: str, thresholds: SeverityThresholds
 ):
+    """Check for hardcoded numeric values (magic numbers) and add issue if found."""
     if re.search(r"=\s*\d{3,}", line) and "const" not in line.lower():
         issues.append(
             build_issue(
@@ -1057,6 +1060,7 @@ def _check_magic_numbers(
 def _check_duplicate_lines(
     issues: list[Issue], lines: list[str], thresholds: SeverityThresholds
 ):
+    """Check for duplicate lines and add issue if found."""
     clean_lines = [
         line.strip() for line in lines if line.strip() and len(line.strip()) > 8
     ]
@@ -1081,6 +1085,7 @@ def _check_duplicate_lines(
 def _check_nesting_depth(
     issues: list[Issue], lines: list[str], thresholds: SeverityThresholds
 ):
+    """Check for excessive nesting depth and add issue if found."""
     max_indent = max(
         (len(line) - len(line.lstrip(" ")) for line in lines if line.strip()), default=0
     )
@@ -1100,6 +1105,7 @@ def _check_nesting_depth(
 def _check_function_count(
     issues: list[Issue], lines: list[str], language: str, thresholds: SeverityThresholds
 ):
+    """Check for excessive function count in file and add issue if found."""
     function_pattern = (
         r"^\s*def\s+\w+\s*\("
         if language.lower() == "python"
@@ -1126,6 +1132,7 @@ def _check_function_count(
 def _check_incomplete_markers(
     issues: list[Issue], lines: list[str], thresholds: SeverityThresholds
 ):
+    """Check for incomplete work markers (TODO, FIXME, etc.) and add issue if found."""
     comment_pattern = r"#.*\b(TODO|FIXME|HACK|XXX|BUG|NOTE)\b"
     for idx, line in enumerate(lines, start=1):
         if re.search(comment_pattern, line, re.IGNORECASE):
@@ -1146,6 +1153,7 @@ def _check_incomplete_markers(
 def _check_unused_imports(
     issues: list[Issue], lines: list[str], language: str, thresholds: SeverityThresholds
 ):
+    """Check for potentially unused imports and add issue if found."""
     import_patterns = {
         "python": r"^\s*(?:import|from\s+\w+\s+import)\s+([a-zA-Z_]\w*)",
         "javascript": r'^\s*(?:import|require)\s+[\'"]([a-zA-Z_][a-zA-Z0-9_-]*)',
@@ -1247,23 +1255,24 @@ def _check_unused_imports(
             if in_func and line.strip() and not line.strip().startswith("#"):
                 if line[0] not in " \t" or (idx - func_start > 3 and not line.strip()):
                     if idx - func_start > 3:
-                        if not any(
-                            re.match(r'^\s+(""".*?""\'|\'\'\'.*?\'\'\')', l_item)
-                            for l_item in lines[func_start:idx]
-                            if l_item.strip()
-                        ):
-                            issues.append(
-                                build_issue(
-                                    thresholds,
-                                    "documentation",
-                                    "Missing docstring",
-                                    f"Function '{func_name}' on line {func_start} has no docstring.",
-                                    35,
-                                    "Add a docstring explaining the function's purpose.",
-                                    func_start,
-                                    line.strip()[:80] if line.strip() else None,
-                                )
-                            )
+                         if not any(
+                             re.match(r'^\s+(""".*?""\'|\'\'\'.*?\'\'\')', l_item)
+                             for l_item in lines[func_start:idx]
+                             if l_item.strip()
+                         ):
+                             issues.append(
+                                 build_issue(
+                                     thresholds,
+                                     "documentation",
+                                     "Missing docstring",
+                                     f"Function '{func_name}' on line {func_start} "
+                                     f"has no docstring.",
+                                     35,
+                                     "Add a docstring explaining the function's purpose.",
+                                     func_start,
+                                     line.strip()[:80] if line.strip() else None,
+                                 )
+                             )
                         in_func = False
 
     tab_lines = []
@@ -1276,18 +1285,19 @@ def _check_unused_imports(
         elif line.startswith("\t"):
             space_indent = False
 
-    if tab_lines:
-        issues.append(
-            build_issue(
-                thresholds,
-                "style",
-                "Inconsistent indentation",
-                f"File mixes tabs and spaces. Found tabs on lines: {', '.join(map(str, tab_lines[:5]))}.",
-                44,
-                "Use consistent indentation (spaces recommended).",
-                code_snippet=f"Mix at lines: {', '.join(map(str, tab_lines[:3]))}",
-            )
-        )
+     if tab_lines:
+         tab_list = ', '.join(map(str, tab_lines[:5]))
+         issues.append(
+             build_issue(
+                 thresholds,
+                 "style",
+                 "Inconsistent indentation",
+                 f"File mixes tabs and spaces. Found tabs on lines: {tab_list}.",
+                 44,
+                 "Use consistent indentation (spaces recommended).",
+                 code_snippet=f"Mix at lines: {', '.join(map(str, tab_lines[:3]))}",
+             )
+         )
 
     lang = language.lower()
 
@@ -1306,6 +1316,7 @@ def _check_unused_imports(
 def _detect_python_issues(
     lines: list[str], thresholds: SeverityThresholds
 ) -> list[Issue]:
+    """Check for Python-specific issues and add issues if found."""
     issues: list[Issue] = []
     for idx, line in enumerate(lines, start=1):
         line_lower = line.lower()
@@ -1508,6 +1519,7 @@ def _check_py_line_complexity(
 def _detect_javascript_issues(
     lines: list[str], thresholds: SeverityThresholds
 ) -> list[Issue]:
+    """Check for JavaScript-specific issues and add issues if found."""
     issues: list[Issue] = []
     for idx, line in enumerate(lines, start=1):
         line_lower = line.lower()
@@ -1913,7 +1925,7 @@ def _check_go_json_unmarshal(issues, idx, line, thresholds):
         )
 
 
-def _check_go_concurrency(issues, idx, line, line_lower, thresholds):
+def _check_go_concurrency(issues, idx, line, _line_lower, thresholds):
     if (
         re.search(r"go\s+func\(\)\s*\{", line)
         and "waitgroup" not in line
@@ -1992,7 +2004,10 @@ def generate_summary(issues: list[Issue]) -> str:
         return "No major slop detected. Code appears clean with minor improvements possible."
     critical = sum(1 for issue in issues if issue.severity == "critical")
     high = sum(1 for issue in issues if issue.severity == "high")
-    return f"Detected {len(issues)} issues ({critical} critical, {high} high). Prioritize security and complexity fixes first."
+    return (
+        f"Detected {len(issues)} issues ({critical} critical, {high} high). "
+        "Prioritize security and complexity fixes first."
+    )
 
 
 def generate_documentation(code: str, language: str) -> str:
@@ -2130,7 +2145,8 @@ def build_default_settings_doc() -> dict[str, Any]:
         providers["ollama"]["model"] = os.environ.get("OLLAMA_MODEL", ollama_model)
         providers["ollama"]["enabled"] = True
     else:
-        # If not using Ollama as primary, still try to detect if it's there but keep it disabled by default
+        # If not using Ollama as primary, still try to detect if it's there
+        # but keep it disabled by default
         # unless it was specifically chosen.
         pass
     # v2: GitHub integration block — token stored encrypted, same pattern as AI provider keys
@@ -2238,7 +2254,8 @@ def to_public_settings(raw: dict[str, Any]) -> AnalyzerSettings:
     )
 
 
-ANALYSIS_SYSTEM_PROMPT = """You are DR.CODE, a strict code quality analyzer. Analyze code and return ONLY valid JSON.
+ANALYSIS_SYSTEM_PROMPT = """You are DR.CODE, a strict code quality analyzer. \
+Analyze code and return ONLY valid JSON.
 
 CATEGORIES:
 - security: vulnerabilities, secrets, injection risks
@@ -3868,7 +3885,7 @@ async def run_github_pr_pipeline(
 async def git_webhook(
     request: Request,
     x_hub_signature_256: Annotated[str | None, Header()] = None,
-    x_github_event: Annotated[str | None, Header()] = None,
+    _x_github_event: Annotated[str | None, Header()] = None,
 ):
     raw_body = await request.body()
     try:
