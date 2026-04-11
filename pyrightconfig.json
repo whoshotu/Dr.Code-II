@@ -1,9 +1,16 @@
 {
-  "include": ["backend"],
-  "exclude": ["backend/venv"],
+  "include": [
+    "backend"
+  ],
+  "exclude": [
+    "backend/venv"
+  ],
   "venvPath": "backend",
   "venv": "venv",
-  "extraPaths": [".", "backend"],
+  "extraPaths": [
+    ".",
+    "backend"
+  ],
   "pythonVersion": "3.12",
   "typeCheckingMode": "basic",
   "reportMissingImports": "error",

@@ -65,7 +65,6 @@ GitHub PR ──webhook──▶ FastAPI Backend ──▶ Rule-based Detection 
 - **[Demo Guide](DEMO_GUIDE.md)**: Walkthrough for hackathon scenarios.
 - **[Known Issues](KNOWN_ISSUES.md)**: Common environmental pitfalls.
 
-
 ## Security
 
 - All API keys and tokens are encrypted with **Fernet symmetric encryption**.
