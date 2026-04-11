@@ -2,7 +2,7 @@ from pathlib import Path
 import sys
 import os
 
-# Add project root to sys.path to allow 'from backend.xxx' imports
+# Add project root to sys.path to allow 'from xxx' imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
@@ -37,11 +37,11 @@ from pydantic import BaseModel, Field, model_validator
 from starlette.middleware.cors import CORSMiddleware
 
 # Moved imports to facilitate top-level package resolution
-from backend.database_sqlite import SQLiteDatabase
-from backend.generators.diagram_generator import generate_diagram
-from backend.generators.docstring_generator import generate_docstrings
-from backend.generators.test_generator import generate_tests
-from backend.local_provider import call_provider_local
+from database_sqlite import SQLiteDatabase
+from generators.diagram_generator import generate_diagram
+from generators.docstring_generator import generate_docstrings
+from generators.test_generator import generate_tests
+from local_provider import call_provider_local
 
 
 # --- Constants ---
@@ -229,7 +229,7 @@ class SeverityThresholds(BaseModel):
 
     @model_validator(mode="after")
     def check_order(self):
-        if not (self.critical > self.high > self.medium >= self.low):
+        if not self.critical > self.high > self.medium >= self.low:
             raise ValueError("Thresholds must follow: critical > high > medium >= low")
         return self
 
@@ -1913,7 +1913,7 @@ def _check_go_json_unmarshal(issues, idx, line, thresholds):
         )
 
 
-def _check_go_concurrency(issues, idx, line, line_lower, thresholds):
+def _check_go_concurrency(issues, idx, line, _line_lower, thresholds):
     if (
         re.search(r"go\s+func\(\)\s*\{", line)
         and "waitgroup" not in line
@@ -3868,13 +3868,13 @@ async def run_github_pr_pipeline(
 async def git_webhook(
     request: Request,
     x_hub_signature_256: Annotated[str | None, Header()] = None,
-    x_github_event: Annotated[str | None, Header()] = None,
+    _x_github_event: Annotated[str | None, Header(alias="x-github-event")] = None,
 ):
     raw_body = await request.body()
     try:
         body = json.loads(raw_body)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
 
     # --- Detect real GitHub PR webhook ---
     if "pull_request" in body and "repository" in body:
