@@ -224,9 +224,10 @@ print_summary() {
     echo -e "======================================${NC}"
     echo ""
     echo "  Service Endpoints:"
-    echo "    - API/Backend: http://localhost:${BACKEND_PORT}"
-    echo "    - Web UI (Expected): http://localhost:${FRONTEND_PORT}"
-    [ "$USE_OLLAMA" = true ] && echo "    - Provider: Ollama ($OLLAMA_MODEL)" || echo "    - Provider: $ACTIVE_PROVIDER ($AI_MODEL_NAME)"
+    echo "    - API/Backend:   http://localhost:${BACKEND_PORT}"
+    echo "    - Web UI (App):  http://localhost:${FRONTEND_PORT}"
+    [ "$USE_OLLAMA" = true ] && echo "    - Docker Ollama: http://localhost:${OLLAMA_PORT}"
+    [ "$USE_OLLAMA" = true ] && echo "    - Provider:      Ollama (${OLLAMA_MODEL:-none selected})" || echo "    - Provider:      $ACTIVE_PROVIDER ($AI_MODEL_NAME)"
     echo ""
 }
 
