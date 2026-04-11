@@ -87,15 +87,15 @@ setup_ai() {
         if detect_ollama; then
             echo -e "${GREEN}Available Ollama models:${NC}"
             ollama list | tail -n +2 || echo "None found."
-            read -p "Enter model name [${OLLAMA_MODEL:-qwen2.5-coder:7b}]: " OLLAMA_MODEL
-            OLLAMA_MODEL=${OLLAMA_MODEL:-${OLLAMA_MODEL:-qwen2.5-coder:7b}}
+            read -p "Enter model name [${OLLAMA_MODEL:-(leave blank if unknown)}]: " USER_OLLAMA_MODEL
+            OLLAMA_MODEL=${USER_OLLAMA_MODEL:-$OLLAMA_MODEL}
             OLLAMA_BASE_URL="http://localhost:11434"
         else
             echo -e "${YELLOW}⚠ Ollama not detected. Please install it from https://ollama.com${NC}"
             read -p "Proceed anyway with default settings? [y/N]: " proceed
             if [[ ! "$proceed" =~ ^[Yy]$ ]]; then exit 1; fi
             OLLAMA_BASE_URL="http://localhost:11434"
-            OLLAMA_MODEL="qwen2.5-coder:7b"
+            OLLAMA_MODEL=""
         fi
     else
         USE_OLLAMA=false
