@@ -54,3 +54,7 @@ DEMO_*.md
 
 # Test samples (intentionally bad code for testing)
 test-samples/
+ollama_data/
+id_ed25519*
+*.pem
+*.backup
