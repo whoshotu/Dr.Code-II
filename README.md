@@ -11,9 +11,10 @@ Get up and running locally in seconds.
 ```bash
 git clone https://github.com/whoshotu/Dr.Code-II.git
 cd Dr.Code-II
-./setup.sh
-docker compose up -d
+./setup.sh   # Interactive — picks your AI provider, ports, and starts services
 ```
+
+The setup wizard will prompt you to choose an AI provider (Ollama, OpenAI, Gemini, or Anthropic), configure ports, and launch the containers automatically.
 
 Access the dashboard at **[http://localhost:3001](http://localhost:3001)**.
 
@@ -59,10 +60,11 @@ GitHub PR ──webhook──▶ FastAPI Backend ──▶ Rule-based Detection 
 
 ## Documentation
 
-- **[Quickstart](file:///home/whoshotu/Documents/Antigravity/DR.Code-II/README.md#quick-start-2-min)**: 2-minute setup.
-- **[Development Guide](file:///home/whoshotu/Documents/Antigravity/DR.Code-II/DEVELOPMENT.md)**: Manual setup, troubleshooting, and advanced config.
-- **[Demo Guide](file:///home/whoshotu/Documents/Antigravity/DR.Code-II/DEMO_GUIDE.md)**: Walkthrough for hackathon scenarios.
-- **[Known Issues](file:///home/whoshotu/Documents/Antigravity/DR.Code-II/KNOWN_ISSUES.md)**: Common environmental pitfalls.
+- **[Quickstart](#quickstart-2-min)**: 2-minute setup.
+- **[Development Guide](DEVELOPMENT.md)**: Manual setup, troubleshooting, and advanced config.
+- **[Demo Guide](DEMO_GUIDE.md)**: Walkthrough for hackathon scenarios.
+- **[Known Issues](KNOWN_ISSUES.md)**: Common environmental pitfalls.
+
 
 ## Security
 
