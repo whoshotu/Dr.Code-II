@@ -19,10 +19,10 @@ find_next_open_port() {
     local start_port=$1
     local port=$start_port
     while is_port_in_use "$port"; do
-        echo -e "${YELLOW}Port $port is occupied, trying $((port + 1))...${NC}"
+        echo -e "${YELLOW}Port $port is occupied, trying $((port + 1))...${NC}" >&2
         port=$((port + 1))
         if [ "$port" -gt $((start_port + 20)) ]; then
-            echo -e "${RED}Error: Could not find an open port after 20 attempts.${NC}"
+            echo -e "${RED}Error: Could not find an open port after 20 attempts.${NC}" >&2
             exit 1
         fi
     done
@@ -69,8 +69,10 @@ setup_ports() {
     echo "Scanning for available ports..."
     BACKEND_PORT=$(find_next_open_port ${BACKEND_PORT:-8002})
     FRONTEND_PORT=$(find_next_open_port ${FRONTEND_PORT:-3001})
+    OLLAMA_PORT=$(find_next_open_port ${OLLAMA_PORT:-11434})
     echo -e "${GREEN}✓ Backend assigned to port: $BACKEND_PORT${NC}"
     echo -e "${GREEN}✓ Frontend assigned to port: $FRONTEND_PORT${NC}"
+    echo -e "${GREEN}✓ Ollama container assigned to port: $OLLAMA_PORT${NC}"
 }
 
 setup_ai() {
@@ -146,6 +148,7 @@ FRONTEND_PORT=$FRONTEND_PORT
 REACT_APP_BACKEND_URL=http://localhost:$BACKEND_PORT
 CORS_ORIGINS=http://localhost:$FRONTEND_PORT
 DB_TYPE=sqlite
+OLLAMA_PORT=$OLLAMA_PORT
 EOF
 
     if [ "$USE_OLLAMA" = true ]; then
@@ -168,10 +171,11 @@ FRONTEND_PORT=$FRONTEND_PORT
 REACT_APP_BACKEND_URL=http://localhost:$BACKEND_PORT
 CORS_ORIGINS=http://localhost:$FRONTEND_PORT
 DB_TYPE=sqlite
+OLLAMA_PORT=$OLLAMA_PORT
 EOF
 
     if [ "$USE_OLLAMA" = true ]; then
-        echo "OLLAMA_BASE_URL=http://host.docker.internal:11434" >> .env.docker
+        echo "OLLAMA_BASE_URL=http://host.docker.internal:$OLLAMA_PORT" >> .env.docker
         echo "OLLAMA_MODEL=$OLLAMA_MODEL" >> .env.docker
     else
         echo "ACTIVE_PROVIDER=$ACTIVE_PROVIDER" >> .env.docker

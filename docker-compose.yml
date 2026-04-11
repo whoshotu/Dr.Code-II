@@ -4,7 +4,7 @@ services:
     image: ollama/ollama:latest
     container_name: ollama
     ports:
-      - "11434:11434"  # Exposed for host-side health checks and local dev
+      - "${OLLAMA_PORT:-11434}:11434"  # Exposed for host-side health checks and local dev
     volumes:
       - ./ollama_data:/root/.ollama
     restart: unless-stopped
