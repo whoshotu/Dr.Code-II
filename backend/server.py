@@ -4056,13 +4056,13 @@ if STATIC_DIR.exists():
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
     response = await call_next(request)
-    # Permissive CSP for Hackathon 'Judge-Ready' mode to support Mermaid, React, and local AI calls
+    # Restrictive CSP - blocks eval() and inline scripts for security
     csp = (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+        "script-src 'self'; "
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: blob:; "
-        "connect-src 'self' *; "
+        "connect-src 'self' http://localhost:* https://*; "
         "font-src 'self' data:;"
     )
     response.headers["Content-Security-Policy"] = csp
