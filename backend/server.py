@@ -71,23 +71,28 @@ MONGO_URL = "sqlite://local"  # Standardized naming
 
 
 def discover_ollama_url() -> tuple[str, str]:
-    """Auto-discover Ollama: localhost → docker internal → env var"""
-    _logger = logging.getLogger(__name__)
-
+    """Auto-discover Ollama: localhost -> docker internal -> env var"""
+    logger = logging.getLogger(__name__)
+    
     # 1. Try localhost first (works in CI and local), then docker internal
     for url in [
-        DEFAULT_OLLAMA_URL,
+        "http://localhost:11435",
+        "http://localhost:11434", 
         "http://host.docker.internal:11434",
         "http://ollama:11434",
+        os.getenv("OLLAMA_URL", "http://localhost:11434")
     ]:
         try:
-            r = requests.get(f"{url}/api/tags", timeout=3)
-            if r.ok:
-                _logger.info("Ollama auto-detected: %s", url)
-                return (url, os.environ.get("OLLAMA_MODEL", "codellama"))
-        except requests.exceptions.RequestException:
+            logger.info(f"Testing Ollama URL: {url}")
+            resp = requests.get(f"{url}/api/tags", timeout=3)
+            if resp.status_code == 200:
+                logger.info(f"✅ Ollama found at {url}")
+                return url, "healthy"
+        except:
             continue
-
+    
+    logger.error("❌ No working Ollama URL found")
+    return "http://localhost:11434", "error"
     # 2. Use env vars as fallback
     base_url = os.environ.get("OLLAMA_BASE_URL", DEFAULT_OLLAMA_URL)
     model = os.environ.get("OLLAMA_MODEL", "codellama")
@@ -2557,7 +2562,9 @@ def generate_repository_fix_proposals(
 
             if extension in {".js", ".jsx"}:
                 js_secret_match = re.match(
-                    r"^(\s*)(?:(const|let|var)\s+)?([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*['\"][^'\"]+['\"]\s*;?\s*$",
+                    r"^(\s*)(?:(const|let|var)\s+)?"
+                    r"([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
+                    r"['\"][^'\"]+['\"]\s*;?\s*$",
                     line,
                 )
                 if js_secret_match:
@@ -2571,7 +2578,9 @@ def generate_repository_fix_proposals(
                     ):
                         env_name = to_env_name(var_name)
                         declaration_prefix = f"{declaration} " if declaration else ""
-                        replacement_line = f"{indent}{declaration_prefix}{var_name} = process.env.{env_name};"
+                        replacement_line = (
+                            f"{indent}{declaration_prefix}{var_name} = process.env.{env_name};"
+                        )
                         proposals.append(
                             FixProposal(
                                 file_path=repo_file.path,
@@ -2768,11 +2777,18 @@ async def analyze_endpoint(
     if provider_allowed:
         # CI/Fail-safe: Check if local models actually exist before calling
         if selected_provider == "ollama":
-            base_url = routing.get("ollama", {}).get("base_url") or settings_doc.get("ollama_base_url")
+            base_url = (
+                routing.get("ollama", {}).get("base_url")
+                or settings_doc.get("ollama_base_url")
+            )
             if base_url:
                 models = _get_ollama_models(base_url)
                 if not models:
-                    ai_payload = {"status": "model-missing", "ai_notes": "Stub CI result: No Ollama models found.", "issues": []}
+                    ai_payload = {
+                        "status": "model-missing",
+                        "ai_notes": "Stub CI result: No Ollama models found.",
+                        "issues": [],
+                    }
         
         if ai_payload is None:
             ai_payload = await call_llm_analysis(
@@ -3549,7 +3565,7 @@ class GithubClient:
     def fetch_pr_files(
         self, owner: str, repo: str, pr_number: int, head_sha: str
     ) -> list[RepositoryFile]:
-        """Return file content for all changed files in a PR that are in SUPPORTED_REPO_EXTENSIONS."""
+        """Return file content for changed files in a PR in SUPPORTED_REPO_EXTENSIONS."""
         logger.info(
             "GithubClient.fetch_pr_files called",
             extra={"owner": owner, "repo": repo, "pr_number": pr_number},

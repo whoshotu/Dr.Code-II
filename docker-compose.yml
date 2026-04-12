@@ -48,3 +48,6 @@ services:
 
 # SQLite-native architecture: no additional database services required.
 # Persistent data stored in ./data volume via SQLite.
+
+volumes:
+  ollama:
