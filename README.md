@@ -62,8 +62,7 @@ GitHub PR ──webhook──▶ FastAPI Backend ──▶ Rule-based Detection 
 
 - **[Quickstart](#quickstart-2-min)**: 2-minute setup.
 - **[Development Guide](DEVELOPMENT.md)**: Manual setup, troubleshooting, and advanced config.
-- **[Demo Guide](DEMO_GUIDE.md)**: Walkthrough for hackathon scenarios.
-- **[Known Issues](KNOWN_ISSUES.md)**: Common environmental pitfalls.
+
 
 ## Security
 
