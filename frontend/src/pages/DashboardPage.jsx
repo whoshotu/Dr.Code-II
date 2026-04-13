@@ -106,7 +106,7 @@ export default function DashboardPage() {
       
       <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '0 1rem' }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }} data-testid="sanitizer-toggle">
-          <input type="checkbox" checked={sanitizerEnabled} onChange={(e) => setSanitizerEnabled(e.target.checked)} /> Sanitizer
+          <input type="checkbox" id="sanitizer-toggle" name="sanitizerToggle" checked={sanitizerEnabled} onChange={(e) => setSanitizerEnabled(e.target.checked)} /> Sanitizer
         </label>
       </div>
       <Tabs defaultValue={"analyze"} className="w-full" data-testid="dashboard-tabs">

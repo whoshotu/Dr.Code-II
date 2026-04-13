@@ -4056,10 +4056,10 @@ if STATIC_DIR.exists():
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
     response = await call_next(request)
-    # Restrictive CSP - blocks eval() and inline scripts for security
+    # CSP allows eval for Mermaid diagram rendering and dynamic features
     csp = (
         "default-src 'self'; "
-        "script-src 'self'; "
+        "script-src 'self' 'unsafe-eval'; "
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: blob:; "
         "connect-src 'self' http://localhost:* https://*; "
