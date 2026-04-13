@@ -76,8 +76,7 @@ def discover_ollama_url() -> tuple[str, str]:
     
     # 1. Try localhost first (works in CI and local), then docker internal
     for url in [
-        "http://localhost:11435",
-        "http://localhost:11434", 
+        "http://localhost:11434",
         "http://host.docker.internal:11434",
         "http://ollama:11434",
         os.getenv("OLLAMA_URL", "http://localhost:11434")
