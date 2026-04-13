@@ -72,7 +72,8 @@ GitHub PR ──webhook──▶ FastAPI Backend ──▶ Rule-based Detection 
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) for details.
+GPL 3
+License — see [LICENSE](LICENSE) for details.
 
 ---
 
